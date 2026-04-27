@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it using the metadata from this file.
+type: software
+title: FermiSea.jl
+version: v0.1.0
+date-released: "2026-04-29"
+authors:
+  - given-names: Jack H.
+    family-names: Farrell
+license: MIT
+doi: 10.5281/zenodo.19899547
+repository-code: https://github.com/jackhfarrell/FermiSea.jl/tree/v0.1.0
