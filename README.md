@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://jackhfarrell.github.io/FermiSea.jl/"><img src="https://img.shields.io/badge/docs-stable-blue.svg" alt="Documentation"></a>
-  <a href="https://doi.org/10.5281/zenodo.19899547"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.19899547.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.20047829"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20047829.svg" alt="DOI"></a>
 </p>
 
 FermiSea.jl simulates 2D electron transport, hydrodynamic and otherwise, in arbitrary device geometries in the Julia programming language. Currently we solve a linear Boltzmann equation with a circular Fermi surface and phenomenological collision terms. The spatial discretization is provided by [`Trixi.jl`](https://trixi-framework.github.io/TrixiDocumentation/stable/), a library for high-order finite volume and discontinuous Galerkin methods.
@@ -16,15 +16,30 @@ FermiSea.jl simulates 2D electron transport, hydrodynamic and otherwise, in arbi
 Find a short tutorial [here](https://jackhfarrell.com/FermiSea.jl/tutorials/).
 
 ## Citation
-If desired, feel free to refer to this code directly as follows:
+If you happen to find this codebase useful, it would be great if you would cite
+our theory paper that introduces it:
 
 ```bibtex
-@software{farrell_fermisea_2026,
+@misc{farrell2026characterizing,
+  author = {Farrell, Jack H. and Lucas, Andrew},
+  title = {Characterizing electronic scattering rates with transport in multiterminal devices},
+  year = {2026},
+  eprint = {2605.03030},
+  archivePrefix = {arXiv},
+  primaryClass = {cond-mat.mes-hall},
+  url = {https://arxiv.org/abs/2605.03030}
+}
+```
+
+You may also refer to it directly as:
+
+```bibtex
+@software{farrell2026FermiSea,
   author = {Farrell, Jack H.},
   title = {FermiSea.jl},
-  version = {v0.1.0},
-  doi = {10.5281/zenodo.19899547},
-  url = {https://github.com/jackhfarrell/FermiSea.jl/tree/v0.1.0},
+  version = {v0.1.1},
+  doi = {10.5281/zenodo.20047829},
+  url = {https://github.com/jackhfarrell/FermiSea.jl/tree/v0.1.1},
   year = {2026}
 }
 ```
@@ -67,6 +82,10 @@ Please additionally reference the original Trixi.jl papers:
 ```
 
 ## Used in
+
+- Jack H. Farrell and Andrew Lucas. “Characterizing electronic scattering rates
+with transport in multiterminal devices”,
+[arXiv: 2605.03030 (2026)](https://arxiv.org/abs/2605.03030).
 
 - Ludwig Holleis, Youngjoon Choi, Canxun Zhang, Jack H. Farrell, Gabriel Bargas,
 Audrey Hsu, Zexing Chen, Ian Sackin, Wenjie Zhou, Yi Guo, Thibault Charpentier,
