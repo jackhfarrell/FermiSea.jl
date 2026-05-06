@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+
+Bugfix release with internal fixes and stability improvements.
+
+This release includes:
+
+- Bug fixes.
+
 ## v0.1.0
 
 Initial release of FermiSea.jl.

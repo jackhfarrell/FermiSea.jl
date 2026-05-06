@@ -16,10 +16,25 @@ FermiSea.jl simulates 2D electron transport, hydrodynamic and otherwise, in arbi
 Find a short tutorial [here](https://jackhfarrell.com/FermiSea.jl/tutorials/).
 
 ## Citation
-If desired, feel free to refer to this code directly as follows:
+If you happen to find this codebase useful, it would be great if you would cite
+our theory paper that introduces it:
 
 ```bibtex
-@software{farrell_fermisea_2026,
+@misc{farrell2026characterizing,
+  author = {Farrell, Jack H. and Lucas, Andrew},
+  title = {Characterizing electronic scattering rates with transport in multiterminal devices},
+  year = {2026},
+  eprint = {2605.03030},
+  archivePrefix = {arXiv},
+  primaryClass = {cond-mat.mes-hall},
+  url = {https://arxiv.org/abs/2605.03030}
+}
+```
+
+You may also refer to it directly as:
+
+```bibtex
+@software{farrell2026FermiSea,
   author = {Farrell, Jack H.},
   title = {FermiSea.jl},
   version = {v0.1.0},
@@ -67,6 +82,10 @@ Please additionally reference the original Trixi.jl papers:
 ```
 
 ## Used in
+
+- Jack H. Farrell and Andrew Lucas. “Characterizing electronic scattering rates
+with transport in multiterminal devices”,
+[arXiv: 2605.03030 (2026)](https://arxiv.org/abs/2605.03030).
 
 - Ludwig Holleis, Youngjoon Choi, Canxun Zhang, Jack H. Farrell, Gabriel Bargas,
 Audrey Hsu, Zexing Chen, Ian Sackin, Wenjie Zhou, Yi Guo, Thibault Charpentier,
