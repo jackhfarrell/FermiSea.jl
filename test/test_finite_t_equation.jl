@@ -210,6 +210,16 @@ end
     @test flux_gradual_channel_volume(u, v, SVector(0.6, 0.8),
                                       equations) ≈ expected_n
 
+    equations_parabolic = GradualChannelForce2D(equations)
+    source = GradualChannelForceSource()
+    grad_x = 0.3 .* v
+    grad_y = -0.2 .* v
+    source_expected = -chi .* ((dot(equations.density_row, grad_x) .* equations.Dx_force .+
+                                dot(equations.density_row, grad_y) .* equations.Dy_force) *
+                               collect(u))
+    @test source(u, (grad_x, grad_y), SVector(0.0, 0.0), 0.0,
+                 equations_parabolic) ≈ source_expected
+
     for D in (equations.Dx_force, equations.Dy_force)
         for j in 1:nvars, i in 1:nvars
             abs(D[i, j]) <= 1.0e-10 && continue
@@ -360,12 +370,19 @@ end
                    surface_flux=(flux_lax_friedrichs,
                                  flux_no_electrostatic_nonconservative),
                    volume_integral=VolumeIntegralFluxDifferencing(
-                       (flux_central, flux_gradual_channel_volume)))
-    semi = SemidiscretizationHyperbolic(mesh, equations, initial_condition, solver;
+                       (flux_central, flux_no_electrostatic_nonconservative)))
+    boundary_conditions = (contact_bottom=OhmicContactBC(-0.01),
+                           contact_top=OhmicContactBC(0.01),
+                           walls=MaxwellWallBC(1.0))
+    boundary_conditions_parabolic = (contact_bottom=boundary_condition_do_nothing,
+                                     contact_top=boundary_condition_do_nothing,
+                                     walls=boundary_condition_do_nothing)
+    semi = SemidiscretizationHyperbolicParabolic(mesh,
+        (equations, GradualChannelForce2D(equations)), initial_condition, solver;
+        solver_parabolic=ParabolicFormulationBassiRebay1(),
         source_terms=NonlinearBGKCollision(equations; gamma_mr=0.1, gamma_mc=1.0),
-        boundary_conditions=(contact_bottom=OhmicContactBC(-0.01),
-                             contact_top=OhmicContactBC(0.01),
-                             walls=MaxwellWallBC(1.0)))
+        source_terms_parabolic=GradualChannelForceSource(),
+        boundary_conditions=(boundary_conditions, boundary_conditions_parabolic))
     ode = semidiscretize(semi, (0.0, 1.0e-3))
     du = similar(ode.u0)
     ode.f(du, ode.u0, ode.p, 0.0)

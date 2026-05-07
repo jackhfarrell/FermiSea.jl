@@ -29,7 +29,7 @@ mesh = P4estMesh{2}(MESH_FILE;
                     polydeg=1,
                     boundary_symbols=[:contact_bottom, :contact_top, :walls])
 
-equations = IsotropicHarmonicsFiniteT2D(10, 2;
+equations = IsotropicHarmonicsFiniteT2D(10, 4;
                                         mass=1.0,
                                         mu0=1.0,
                                         temperature=0.05,
@@ -52,21 +52,31 @@ boundary_conditions = (;
     contact_top = OhmicContactBC(-2.1),
     walls = MaxwellWallBC(1.0),
 )
+boundary_conditions_parabolic = (;
+    contact_bottom = boundary_condition_do_nothing,
+    contact_top = boundary_condition_do_nothing,
+    walls = boundary_condition_do_nothing,
+)
 
 solver = DGSEM(polydeg=2,
                surface_flux=(flux_lax_friedrichs,
                              flux_no_electrostatic_nonconservative),
                volume_integral=VolumeIntegralFluxDifferencing(
-                   (flux_central, flux_gradual_channel_volume)))
-semi = SemidiscretizationHyperbolic(mesh, equations, initial_condition, solver;
-                                    source_terms=collisions,
-                                    boundary_conditions=boundary_conditions)
+                   (flux_central, flux_no_electrostatic_nonconservative)))
+equations_parabolic = GradualChannelForce2D(equations)
+semi = SemidiscretizationHyperbolicParabolic(mesh, (equations, equations_parabolic),
+                                             initial_condition, solver;
+                                             solver_parabolic=ParabolicFormulationBassiRebay1(),
+                                             source_terms=collisions,
+                                             source_terms_parabolic=GradualChannelForceSource(),
+                                             boundary_conditions=(boundary_conditions,
+                                                                  boundary_conditions_parabolic))
 ode = semidiscretize(semi, (0.0, 8.0))
 
 callbacks = CallbackSet(
     SummaryCallback(),
     AnalysisCallback(semi; interval=200, analysis_errors=Symbol[]),
-    StepsizeCallback(; cfl=0.05),
+    StepsizeCallback(; cfl=0.3),
 )
 
 integrator = init(ode, SSPRK43();

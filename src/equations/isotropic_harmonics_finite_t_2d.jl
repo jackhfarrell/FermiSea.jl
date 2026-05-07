@@ -42,10 +42,12 @@ through quadratic order by projecting
 
 If `electrostatic_chi != 0`, the model also includes the self-consistent gradual
 channel force from ``U = \chi n``. The linear force contribution is folded into
-the conservative flux matrices. The nonlinear force contribution is exposed as
-`flux_gradual_channel_volume` for use only as a volume nonconservative term,
-paired with `flux_no_electrostatic_nonconservative` at surfaces to impose no
-additional force boundary condition.
+the conservative flux matrices. The nonlinear force completion is provided by
+`GradualChannelForce2D` and `GradualChannelForceSource` for Trixi's
+hyperbolic-parabolic workflow, where Trixi computes the spatial gradients and
+the parabolic flux is zero. This imposes do-nothing parabolic boundary
+conditions while applying the source ``-\chi \nabla n \cdot \nabla_p f`` in the
+volume.
 """
 struct IsotropicHarmonicsFiniteT2D{NVARS, ELECTROSTATIC} <: AbstractEquations{2, NVARS}
     n_harmonics::Int
@@ -905,6 +907,60 @@ end
 # ------------------------------------------------------------------------------------------
 # Source terms
 # ------------------------------------------------------------------------------------------
+
+"""
+    GradualChannelForce2D(equations_hyperbolic)
+
+Parabolic-side equation wrapper for the nonlinear gradual-channel force. Trixi's
+hyperbolic-parabolic workflow computes gradients of the conservative variables
+for this equation; `GradualChannelForceSource` then applies
+`-χ ∇δn ⋅ ∇p δf` as a gradient-dependent source term. The parabolic flux itself
+is zero, so the completion imposes no extra flux boundary condition.
+"""
+struct GradualChannelForce2D{E, NVARS} <:
+       Trixi.AbstractEquationsParabolic{2, NVARS,
+                                        Trixi.GradientVariablesConservative}
+    equations_hyperbolic::E
+end
+
+function GradualChannelForce2D(equations_hyperbolic::IsotropicHarmonicsFiniteT2D)
+    return GradualChannelForce2D{typeof(equations_hyperbolic),
+                                 nvariables(equations_hyperbolic)}(equations_hyperbolic)
+end
+
+@inline Base.getproperty(equations::GradualChannelForce2D, field::Symbol) =
+    field === :equations_hyperbolic ? getfield(equations, field) :
+    getproperty(getfield(equations, :equations_hyperbolic), field)
+
+@inline Base.propertynames(equations::GradualChannelForce2D,
+                           private::Bool=false) =
+    (fieldnames(typeof(equations))...,
+     propertynames(getfield(equations, :equations_hyperbolic), private)...)
+
+@inline varnames(variable_mapping, equations::GradualChannelForce2D) =
+    varnames(variable_mapping, equations.equations_hyperbolic)
+
+@inline Trixi.have_constant_diffusivity(::GradualChannelForce2D) = Trixi.True()
+
+@inline Trixi.max_diffusivity(::GradualChannelForce2D) = 0.0
+
+@inline function flux(u, gradients, orientation::Integer,
+                      equations::GradualChannelForce2D{E, NVARS}) where {E, NVARS}
+    return zero(SVector{NVARS, eltype(u)})
+end
+
+struct GradualChannelForceSource end
+
+@inline function (::GradualChannelForceSource)(u, gradients, x, t,
+                                               equations::GradualChannelForce2D{E, NVARS}) where {E, NVARS}
+    grad_x, grad_y = gradients
+    density_x = dot(equations.density_row, grad_x)
+    density_y = dot(equations.density_row, grad_y)
+    force_state = _finite_apply_force_matrix(equations.equations_hyperbolic,
+                                             SVector(density_x, density_y),
+                                             u, Val(NVARS))
+    return -convert(eltype(u), equations.electrostatic_chi) * force_state
+end
 
 function LinearCollisionMatrix(equations::IsotropicHarmonicsFiniteT2D, W::AbstractMatrix)
     nvars = nvariables(equations)

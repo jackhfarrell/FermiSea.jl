@@ -18,6 +18,7 @@ include("callbacks_step/callbacks_step.jl")
 include("visualization/visualization.jl")
 
 export IsotropicFermiHarmonics2D, IsotropicHarmonicsFiniteT2D
+export GradualChannelForce2D, GradualChannelForceSource
 export LinearCollisionMatrix, NonlinearBGKCollision, MagneticFieldSource, SourceTerms
 export flux_gradual_channel_volume, flux_no_electrostatic_nonconservative
 export flux_electrostatic_nonconservative
