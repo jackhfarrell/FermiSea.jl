@@ -45,6 +45,13 @@
     density_moment = reshape(equations.moment_matrix[1, :], 1, :)
     @test density_moment * (equations.density_projector * c) ≈
           density_moment * c atol=1.0e-10
+    q = @. tanh(equations.z_nodes / 2) / (2 * equations.temperature)
+    expected_quadratic_density = FermiSea._finite_embedding(equations.n_harmonics,
+                                                            equations.n_radial,
+                                                            equations.radial_basis,
+                                                            equations.quad_weights,
+                                                            0, :cos, q)
+    @test equations.local_equilibrium_quadratic[:, 1] ≈ expected_quadratic_density
 
     gamma_mr = 0.2
     gamma_mc = 0.7
@@ -190,6 +197,8 @@ end
                          chi .* (equations.velocity_embedding_y *
                                   equations.density_row')
     @test Trixi.flux(u, 1, equations) ≈ equations.Ax * u
+    @test equations0.force_vmax == 0.0
+    @test equations.force_vmax > 0
 
     @test flux_gradual_channel_volume(zero(u), v, 1, equations) ==
           zero(u)
@@ -351,6 +360,26 @@ end
     d2 = source(2alpha .* direction, SVector(0.0, 0.0), 0.0, equations) -
          linear(2alpha .* direction, SVector(0.0, 0.0), 0.0, equations)
     @test norm(d2 - 4 .* d1) <= 5.0e-2 * max(norm(d2), eps(Float64))
+
+    density_response = dot(equations.density_row, equations.local_equilibrium_linear[:, 1])
+    bad_scale = -2 * equations.equilibrium_density / density_response
+    bad_state = SVector{nvars, Float64}(bad_scale .* equations.local_equilibrium_linear[:, 1])
+    @test isnan(hydrodynamic_density(equations, bad_state))
+    @test isnan(hydrodynamic_chemical_potential_shift(equations, bad_state))
+    bad_fields = hydrodynamic_fields(equations, bad_state)
+    @test !isfinite(bad_fields.density)
+    @test !isfinite(bad_fields.delta_mu)
+    @test all(!isfinite, bad_fields.velocity)
+    @test all(!isfinite, source(bad_state, SVector(0.0, 0.0), 0.0, equations))
+    bad_template = FermiSea._template(MaxwellWallBC(1.0), bad_state, SVector(1.0, 0.0),
+                                      equations)
+    @test all(!isfinite, bad_template)
+
+    truncated_equations = IsotropicHarmonicsFiniteT2D(1, 2; mass=1.0, mu0=1.0,
+                                                      temperature=0.05, n_quad=96)
+    @test_logs (:warn,
+                r"truncates the ell=2 quadratic target components") NonlinearBGKCollision(
+        truncated_equations; gamma_mr=0.1, gamma_mc=0.2)
 
     energy_equations = IsotropicHarmonicsFiniteT2D(2, 2; conserve_energy=true)
     @test_throws ArgumentError NonlinearBGKCollision(energy_equations;

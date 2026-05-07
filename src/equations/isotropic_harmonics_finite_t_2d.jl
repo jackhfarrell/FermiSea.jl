@@ -38,7 +38,7 @@ a0_r0, a0_r1, \ldots, a1_r0, \ldots, b1_r0, \ldots, a2_r0, b2_r0, \ldots
 `LinearCollisionMatrix` provides the linear-response collision model.
 `NonlinearBGKCollision` provides an isothermal local-equilibrium BGK closure
 through quadratic order by projecting
-``Psi - tanh((epsilon - mu0)/(2T)) Psi^2 / (2T)`` into this same basis.
+``Psi + tanh((epsilon - mu0)/(2T)) Psi^2 / (2T)`` into this same basis.
 
 If `electrostatic_chi != 0`, the model also includes the self-consistent gradual
 channel force from ``U = \chi n``. The linear force contribution is folded into
@@ -78,6 +78,7 @@ struct IsotropicHarmonicsFiniteT2D{NVARS, ELECTROSTATIC} <: AbstractEquations{2,
     Dy_force_triplets::MatrixTriplets
     moment_matrix::Matrix{Float64}
     hydro_embedding::Matrix{Float64}
+    hydro_correction::Matrix{Float64}
     hydro_projector::Matrix{Float64}
     density_projector::Matrix{Float64}
     density_row::Vector{Float64}
@@ -85,6 +86,7 @@ struct IsotropicHarmonicsFiniteT2D{NVARS, ELECTROSTATIC} <: AbstractEquations{2,
     local_equilibrium_linear::Matrix{Float64}
     local_equilibrium_quadratic::Matrix{Float64}
     gram_sqrt::Vector{Float64}
+    force_vmax::Float64
     vmax::Float64
 end
 
@@ -130,6 +132,7 @@ function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
         _finite_t_moment_data(n_harmonics, n_radial, eps_nodes, p_nodes, quad_weights,
                               radial_basis, conserve_energy)
     density_row = vec(moment_matrix[1, :])
+    hydro_correction = hydro_embedding / (moment_matrix * hydro_embedding)
     velocity_embedding_x, velocity_embedding_y =
         _finite_t_velocity_embeddings(n_harmonics, n_radial, mass, p_nodes,
                                       quad_weights, radial_basis)
@@ -151,6 +154,8 @@ function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
     Ay_triplets = _finite_matrix_triplets(Ay)
     Dx_force_triplets = _finite_matrix_triplets(Dx_force)
     Dy_force_triplets = _finite_matrix_triplets(Dy_force)
+    force_vmax = electrostatic_chi == 0 ? 0.0 :
+                 hypot(opnorm(Dx_force, 2), opnorm(Dy_force, 2))
     vmax = electrostatic_chi == 0 ? kinetic_vmax :
            _finite_t_characteristic_speed(Ax, Ay, kinetic_vmax)
     equilibrium_density = 2 * temperature * _finite_log1pexp(mu0 / temperature)
@@ -162,9 +167,10 @@ function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
         fermi_window, radial_basis, radial_basis_z_derivative, radial_grams, Ax, Ay,
         Ax_triplets, Ay_triplets, velocity_embedding_x, velocity_embedding_y,
         Dx_force, Dy_force, Dx_force_triplets, Dy_force_triplets,
-        moment_matrix, hydro_embedding, hydro_projector, density_projector,
+        moment_matrix, hydro_embedding, hydro_correction, hydro_projector,
+        density_projector,
         density_row, equilibrium_density, local_equilibrium_linear,
-        local_equilibrium_quadratic, gram_sqrt, vmax)
+        local_equilibrium_quadratic, gram_sqrt, force_vmax, vmax)
 end
 
 # ------------------------------------------------------------------------------------------
@@ -242,7 +248,7 @@ end
 
 @inline function _finite_logexpm1(x::Real)
     x = Float64(x)
-    x > 0 || throw(DomainError(x, "density must be positive"))
+    x > 0 || return NaN
     return x > log(2.0) ? x + log1p(-exp(-x)) : log(expm1(x))
 end
 
@@ -542,7 +548,7 @@ function _finite_t_local_equilibrium_embeddings(n_harmonics, n_radial, temperatu
     quadratic = zeros(Float64, nvars, 6)
 
     ones_q = ones(Float64, length(weights))
-    q = @. -tanh(z_nodes / 2) / (2 * temperature)
+    q = @. tanh(z_nodes / 2) / (2 * temperature)
     qp = q .* p_nodes
     qp2 = q .* abs2.(p_nodes)
 
@@ -780,8 +786,7 @@ Trixi.have_nonconservative_terms(::IsotropicHarmonicsFiniteT2D{NVARS, true}) whe
 
 @inline residual_steady_state(du, ::IsotropicHarmonicsFiniteT2D) = maximum(abs, du)
 
-@inline _transformed_speed(equations::IsotropicHarmonicsFiniteT2D, Ja1, Ja2) =
-    equations.vmax * sqrt(Ja1^2 + Ja2^2)
+@inline _transformed_speed(speed, Ja1, Ja2) = speed * sqrt(Ja1^2 + Ja2^2)
 
 function Trixi.max_dt(u, t,
                       mesh::Union{Trixi.P4estMesh{2}, Trixi.P4estMeshView{2},
@@ -796,13 +801,19 @@ function Trixi.max_dt(u, t,
 
     for element in Trixi.eachelement(dg, cache)
         for j in Trixi.eachnode(dg), i in Trixi.eachnode(dg)
+            u_node = Trixi.get_node_vars(u, equations, dg, i, j, element)
+            density_scale = abs(dot(equations.density_row, u_node))
+            nonlinear_speed = abs(equations.electrostatic_chi) * density_scale *
+                              equations.force_vmax
             Ja11, Ja12 = Trixi.get_contravariant_vector(1, contravariant_vectors,
                                                         i, j, element)
             Ja21, Ja22 = Trixi.get_contravariant_vector(2, contravariant_vectors,
                                                         i, j, element)
             inv_jac = abs(inverse_jacobian[i, j, element])
-            lambda1 = _transformed_speed(equations, Ja11, Ja12) * inv_jac
-            lambda2 = _transformed_speed(equations, Ja21, Ja22) * inv_jac
+            lambda1 = (_transformed_speed(equations.vmax, Ja11, Ja12) +
+                       _transformed_speed(nonlinear_speed, Ja11, Ja12)) * inv_jac
+            lambda2 = (_transformed_speed(equations.vmax, Ja21, Ja22) +
+                       _transformed_speed(nonlinear_speed, Ja21, Ja22)) * inv_jac
             max_scaled_speed = Base.max(max_scaled_speed, lambda1 + lambda2)
         end
     end
@@ -822,19 +833,6 @@ function _finite_force_triplets(equations::IsotropicHarmonicsFiniteT2D,
     orientation == 1 && return equations.Dx_force_triplets
     orientation == 2 && return equations.Dy_force_triplets
     throw(ArgumentError("orientation must be 1 or 2"))
-end
-
-function _finite_apply_matrix(A, u, ::Val{NVARS}) where {NVARS}
-    T = eltype(u)
-    result = MVector{NVARS, T}(undef)
-    @inbounds for i in 1:NVARS
-        value = zero(T)
-        for j in 1:NVARS
-            value += convert(T, A[i, j]) * u[j]
-        end
-        result[i] = value
-    end
-    return SVector(result)
 end
 
 function _finite_apply_force_matrix(equations::IsotropicHarmonicsFiniteT2D,
@@ -1006,6 +1004,11 @@ function NonlinearBGKCollision(equations::IsotropicHarmonicsFiniteT2D;
     gamma_mc = Float64(gamma_mc)
     gamma_mr >= 0 || throw(ArgumentError("gamma_mr must be non-negative"))
     gamma_mc >= 0 || throw(ArgumentError("gamma_mc must be non-negative"))
+    if equations.n_harmonics < 2 && gamma_mc != 0
+        @warn "NonlinearBGKCollision with n_harmonics=1 truncates the ell=2 " *
+              "quadratic target components, so the momentum-conserving BGK " *
+              "equilibrium loses anisotropic O(v^2) content"
+    end
     return NonlinearBGKCollision(gamma_mr, gamma_mc)
 end
 
@@ -1015,13 +1018,13 @@ end
 Total isothermal parabolic-band density `n0 + delta_n` represented by coefficient
 state `u`. The evolved scalar moment `dot(equations.density_row, u)` is the
 perturbation density `delta_n`; this helper adds the equilibrium density because
-the nonlinear BGK formulas need the positive total density.
+the nonlinear BGK formulas need the positive total density. If the reconstructed
+density is non-positive, this returns `NaN` so time integration can fail through
+the residual instead of an exception in the hot path.
 """
 function hydrodynamic_density(equations::IsotropicHarmonicsFiniteT2D, u)
     n_total = equations.equilibrium_density + dot(equations.density_row, u)
-    n_total > 0 ||
-        throw(DomainError(n_total, "total density must remain positive"))
-    return n_total
+    return n_total > 0 ? n_total : oftype(n_total, NaN)
 end
 
 """
@@ -1064,7 +1067,8 @@ end
 
 Return hydrodynamic diagnostics using the exact finite-temperature isothermal
 formulas. `density_delta` is the perturbation density `delta_n`, while `density`
-is the total positive density `n0 + delta_n`.
+is the total density `n0 + delta_n`. If that density becomes non-positive, the
+returned diagnostics are non-finite sentinels.
 """
 function hydrodynamic_fields(equations::IsotropicHarmonicsFiniteT2D, u)
     density = hydrodynamic_density(equations, u)
@@ -1135,24 +1139,23 @@ end
 function _finite_local_equilibrium(equations::IsotropicHarmonicsFiniteT2D{NVARS},
                                    delta_mu, vx, vy) where {NVARS}
     T = promote_type(typeof(delta_mu), typeof(vx), typeof(vy))
-    result = MVector{NVARS, T}(undef)
+    result = zero(MVector{NVARS, T})
     speed2 = vx^2 + vy^2
     A = delta_mu - T(0.5) * convert(T, equations.mass) * speed2
 
     coeffs = (A, vx, vy, A^2, 2 * A * vx, 2 * A * vy,
               vx^2, vy^2, 2 * vx * vy)
-    @inbounds for i in 1:NVARS
-        value = zero(T)
-        value += coeffs[1] * convert(T, equations.local_equilibrium_linear[i, 1])
-        value += coeffs[2] * convert(T, equations.local_equilibrium_linear[i, 2])
-        value += coeffs[3] * convert(T, equations.local_equilibrium_linear[i, 3])
-        value += coeffs[4] * convert(T, equations.local_equilibrium_quadratic[i, 1])
-        value += coeffs[5] * convert(T, equations.local_equilibrium_quadratic[i, 2])
-        value += coeffs[6] * convert(T, equations.local_equilibrium_quadratic[i, 3])
-        value += coeffs[7] * convert(T, equations.local_equilibrium_quadratic[i, 4])
-        value += coeffs[8] * convert(T, equations.local_equilibrium_quadratic[i, 5])
-        value += coeffs[9] * convert(T, equations.local_equilibrium_quadratic[i, 6])
-        result[i] = value
+    @inbounds for j in 1:3
+        coeff = coeffs[j]
+        for i in 1:NVARS
+            result[i] += coeff * convert(T, equations.local_equilibrium_linear[i, j])
+        end
+    end
+    @inbounds for j in 1:6
+        coeff = coeffs[j + 3]
+        for i in 1:NVARS
+            result[i] += coeff * convert(T, equations.local_equilibrium_quadratic[i, j])
+        end
     end
     return SVector(result)
 end
@@ -1174,15 +1177,27 @@ end
 function _finite_correct_hydro(equations::IsotropicHarmonicsFiniteT2D{NVARS}, target,
                                u) where {NVARS}
     T = promote_type(eltype(target), eltype(u))
-    residual = equations.moment_matrix * collect(u) -
-               equations.moment_matrix * collect(target)
-    coeffs = (equations.moment_matrix * equations.hydro_embedding) \ residual
     result = MVector{NVARS, T}(undef)
+    n_moments = size(equations.hydro_correction, 2)
+    residual1 = zero(T)
+    residual2 = zero(T)
+    residual3 = zero(T)
+    residual4 = zero(T)
+    @inbounds for j in 1:NVARS
+        delta = u[j] - target[j]
+        residual1 += convert(T, equations.moment_matrix[1, j]) * delta
+        residual2 += convert(T, equations.moment_matrix[2, j]) * delta
+        residual3 += convert(T, equations.moment_matrix[3, j]) * delta
+        if n_moments == 4
+            residual4 += convert(T, equations.moment_matrix[4, j]) * delta
+        end
+    end
     @inbounds for i in 1:NVARS
-        correction = zero(T)
-        for j in axes(equations.hydro_embedding, 2)
-            correction += convert(T, equations.hydro_embedding[i, j]) *
-                          convert(T, coeffs[j])
+        correction = convert(T, equations.hydro_correction[i, 1]) * residual1 +
+                     convert(T, equations.hydro_correction[i, 2]) * residual2 +
+                     convert(T, equations.hydro_correction[i, 3]) * residual3
+        if n_moments == 4
+            correction += convert(T, equations.hydro_correction[i, 4]) * residual4
         end
         result[i] = target[i] + correction
     end
@@ -1343,11 +1358,7 @@ function _finite_diffuse_thermal_template(u_inner,
                                           equations::IsotropicHarmonicsFiniteT2D)
     density_delta = dot(equations.density_row, u_inner)
     n_total = equations.equilibrium_density + density_delta
-    n_total > 0 ||
-        throw(DomainError(n_total, "wall thermal density must remain positive"))
-    delta_mu = equations.temperature *
-               _finite_logexpm1(n_total / (2 * equations.temperature)) -
-               equations.mu0
+    delta_mu = _finite_chemical_potential_shift_from_density(equations, n_total)
     target = _finite_local_equilibrium(equations, delta_mu, zero(delta_mu),
                                        zero(delta_mu))
     return _finite_correct_to_density(equations, target, density_delta)
