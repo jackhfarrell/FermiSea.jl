@@ -35,19 +35,21 @@ equations = IsotropicHarmonicsFiniteT2D(10, 2;
                                         temperature=0.05,
                                         zmax=20.0,
                                         n_quad=128,
-                                        electrostatic_chi=100.0)
+                                        electrostatic_chi=10.0)
 
 collisions = NonlinearBGKCollision(equations; gamma_mr=0.0, gamma_mc=50.0)
 
 initial_condition(x, t, equations) =
     zero(SVector{nvariables(equations), Float64})
 
-# These contacts prescribe the reservoir kinetic potential delta_mu. The target
-# density is projected through incoming characteristics; electrostatic coupling
-# then enters through the gradual-channel force U = chi * delta_n in the PDE.
+# These Ohmic contacts prescribe reservoir electrochemical potentials. With the
+# parameters above, +/-2.1 corresponds to density offsets close to
+# delta_n / n0 = +/-0.1, or delta_mu / mu0 ~= +/-0.1. Boundary projectors at
+# contacts use the full gradual-channel characteristic split; walls remain
+# kinetic scattering boundaries.
 boundary_conditions = (;
-    contact_bottom = ChemicalPotentialContactBC(0.2),
-    contact_top = ChemicalPotentialContactBC(-0.2),
+    contact_bottom = OhmicContactBC(2.1),
+    contact_top = OhmicContactBC(-2.1),
     walls = MaxwellWallBC(1.0),
 )
 
@@ -87,13 +89,23 @@ function field_data(u, semi, equations)
     electrochemical_potential = Vector{Float64}(undef, length(states))
     vy = Vector{Float64}(undef, length(states))
     speed = Vector{Float64}(undef, length(states))
+    density_floor = max(sqrt(eps(Float64)) * equations.equilibrium_density,
+                        sqrt(eps(Float64)))
 
     @inbounds for i in eachindex(states)
-        fields = hydrodynamic_fields(equations, states[i])
-        density_deviation[i] = fields.density_delta / equations.equilibrium_density
-        electrochemical_potential[i] = fields.electrochemical_potential
-        vy[i] = fields.velocity[2]
-        speed[i] = fields.speed
+        state = states[i]
+        density_delta = dot(equations.density_row, state)
+        density = equations.equilibrium_density + density_delta
+        density_for_diagnostics = max(density, density_floor)
+        delta_mu = FermiSea._finite_chemical_potential_shift_from_density(equations,
+                                                                          density_for_diagnostics)
+        momentum = hydrodynamic_momentum(equations, state)
+        velocity = momentum ./ (equations.mass * density_for_diagnostics)
+        density_deviation[i] = density_delta / equations.equilibrium_density
+        electrochemical_potential[i] = delta_mu + equations.electrostatic_chi *
+                                       density_delta
+        vy[i] = velocity[2]
+        speed[i] = hypot(velocity[1], velocity[2])
     end
 
     return plot_data, density_deviation, electrochemical_potential, vy, speed

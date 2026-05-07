@@ -246,13 +246,29 @@ end
     potential_boundary = FermiSea.assemble_ghost_state(potential_contact, zero(u),
                                                        SVector(0.0, 1.0),
                                                        equations)
-    @test potential_boundary ≈
-          FermiSea._apply_P_in(FermiSea.build_projector_cache(equations,
-                                                              SVector(0.0, 1.0),
-                                                              FermiSea.normal_flux_row(equations,
-                                                                                       SVector(0.0,
-                                                                                               1.0))),
-                               potential_template) atol=1.0e-12
+    potential_boundary_fields = hydrodynamic_fields(equations, potential_boundary)
+    @test 0 < potential_boundary_fields.density_delta <
+          potential_fields.density_delta
+
+    density_contact = DensityContactBC(0.1)
+    density_template = FermiSea._template(density_contact, zero(u), equations)
+    density_fields = hydrodynamic_fields(equations, density_template)
+    @test density_fields.density_delta / equations.equilibrium_density ≈
+          density_contact.relative_density atol=1.0e-12
+    @test density_fields.delta_mu ≈
+          FermiSea._finite_chemical_potential_shift_from_density_delta(equations,
+                                                                       0.1 *
+                                                                       equations.equilibrium_density)
+    density_boundary = FermiSea.assemble_ghost_state(density_contact, zero(u),
+                                                     SVector(0.0, 1.0),
+                                                     equations)
+    density_boundary_fields = hydrodynamic_fields(equations, density_boundary)
+    @test 0 < density_boundary_fields.density_delta / equations.equilibrium_density <
+          density_contact.relative_density
+
+    normal = SVector(0.0, 1.0)
+    @test Trixi.flux(potential_boundary, normal, equations) ≈
+          equations.Ay * potential_boundary
 end
 
 @testset "finite-temperature nonlinear BGK" begin

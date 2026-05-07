@@ -559,12 +559,16 @@ end
     end
 end
 
+@inline function _boundary_projector_cache_for(equations, n, rho_row, bc)
+    return build_projector_cache(equations, n, rho_row)
+end
+
 @inline function _projector_index!(storage::BoundaryProjectorCache, projector_by_normal,
-                                   n::SVector, normal_key, equations)
+                                   n::SVector, normal_key, equations, bc)
     return get!(projector_by_normal, normal_key) do
         rho_row = normal_flux_row(equations, n)
         push!(storage.projectors,
-              build_projector_cache(equations, n, rho_row))
+              _boundary_projector_cache_for(equations, n, rho_row, bc))
         length(storage.projectors)
     end
 end
@@ -573,10 +577,10 @@ end
 # at setup from `initialize_boundary_projectors!`. The hot path uses
 # `_lookup_projectors` which is read-only.
 function _populate_projector!(storage::BoundaryProjectorCache, projector_by_normal,
-                              boundary, node, normal, equations)
+                              boundary, node, normal, equations, bc)
     n = _normalized_normal(normal)
     projector_index = _projector_index!(storage, projector_by_normal, n,
-                                        _normal_cache_key(n), equations)
+                                        _normal_cache_key(n), equations, bc)
     storage.projector_indices[(boundary, node)] = projector_index
     return nothing
 end
@@ -681,7 +685,8 @@ function _initialize_boundary_projectors!(bcs::Trixi.UnstructuredSortedBoundaryT
 
             if face_projector
                 storage.projector_face_indices[boundary] = _projector_index!(
-                    storage, projector_by_normal, face_normal, face_normal_key, equations)
+                    storage, projector_by_normal, face_normal, face_normal_key,
+                    equations, bc)
             else
                 i_node = i_start
                 j_node = j_start
@@ -689,7 +694,7 @@ function _initialize_boundary_projectors!(bcs::Trixi.UnstructuredSortedBoundaryT
                     normal = Trixi.get_normal_direction(direction, contravariant_vectors,
                                                         i_node, j_node, element)
                     _populate_projector!(storage, projector_by_normal, boundary, node,
-                                         normal, equations)
+                                         normal, equations, bc)
                     i_node += i_step
                     j_node += j_step
                 end
