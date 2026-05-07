@@ -17,7 +17,7 @@ include("auxiliary/auxiliary.jl")
 include("callbacks_step/callbacks_step.jl")
 include("visualization/visualization.jl")
 
-export IsotropicFermiHarmonics2D
+export IsotropicFermiHarmonics2D, IsotropicHarmonicsFiniteT2D
 export LinearCollisionMatrix, MagneticFieldSource, SourceTerms
 export MaxwellWallBC, OhmicContactBC, FloatingProbeBC, CurrentContactBC
 export SteadyStateResidual, ContactCurrent, ContactCurrentAverage

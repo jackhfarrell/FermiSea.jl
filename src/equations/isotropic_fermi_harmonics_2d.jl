@@ -521,6 +521,9 @@ function build_projector_cache(n_harmonics::Integer, normal::AbstractVector{T},
     )
 end
 
+build_projector_cache(equations::IsotropicFermiHarmonics2D, normal, rho_row) =
+    build_projector_cache(equations.n_harmonics, normal, rho_row)
+
 @inline function solve_bc_constant(cache::ProjectorCache{T, NVARS, KIN, L},
                                    u_inner::SVector{NVARS, T};
                                    u_bc_template::SVector{NVARS, T}=zero(u_inner),
@@ -561,7 +564,7 @@ end
     return get!(projector_by_normal, normal_key) do
         rho_row = normal_flux_row(equations, n)
         push!(storage.projectors,
-              build_projector_cache(equations.n_harmonics, n, rho_row))
+              build_projector_cache(equations, n, rho_row))
         length(storage.projectors)
     end
 end
@@ -603,7 +606,7 @@ end
 @inline function _build_uncached_projectors(normal, equations)
     n = _normalized_normal(normal)
     rho_row = normal_flux_row(equations, n)
-    return build_projector_cache(equations.n_harmonics, n, rho_row)
+    return build_projector_cache(equations, n, rho_row)
 end
 
 """
