@@ -40,10 +40,12 @@ a0_r0, a0_r1, \ldots, a1_r0, \ldots, b1_r0, \ldots, a2_r0, b2_r0, \ldots
 through quadratic order by projecting
 ``Psi - tanh((epsilon - mu0)/(2T)) Psi^2 / (2T)`` into this same basis.
 
-If `electrostatic_chi != 0`, the model also includes the self-consistent Vlasov
-force from ``U = \chi n`` through quadratic order in the coefficient field: the
-linear force contribution is folded into the conservative flux matrices and the
-quadratic contribution is exposed as `flux_electrostatic_nonconservative`.
+If `electrostatic_chi != 0`, the model also includes the self-consistent gradual
+channel force from ``U = \chi n``. The linear force contribution is folded into
+the conservative flux matrices. The nonlinear force contribution is exposed as
+`flux_gradual_channel_volume` for use only as a volume nonconservative term,
+paired with `flux_no_electrostatic_nonconservative` at surfaces to impose no
+additional force boundary condition.
 """
 struct IsotropicHarmonicsFiniteT2D{NVARS, ELECTROSTATIC} <: AbstractEquations{2, NVARS}
     n_harmonics::Int
@@ -845,9 +847,33 @@ function _finite_apply_force_matrix(equations::IsotropicHarmonicsFiniteT2D,
     return SVector(result)
 end
 
-@inline function flux_electrostatic_nonconservative(u_mine, u_other,
-                                                    orientation::Integer,
-                                                    equations::IsotropicHarmonicsFiniteT2D{NVARS}) where {NVARS}
+@inline function flux_no_electrostatic_nonconservative(u_mine, u_other,
+                                                       orientation::Integer,
+                                                       equations::IsotropicHarmonicsFiniteT2D)
+    return zero(u_mine)
+end
+
+@inline function flux_no_electrostatic_nonconservative(u_mine, u_other,
+                                                       normal_direction::AbstractVector,
+                                                       equations::IsotropicHarmonicsFiniteT2D)
+    return zero(u_mine)
+end
+
+@doc raw"""
+    flux_gradual_channel_volume(u_mine, u_other, direction, equations)
+
+Interior two-point flux for the nonlinear gradual-channel force
+``-\chi \nabla\delta n \cdot \nabla_p \delta f``. The momentum derivatives are
+the precomputed spectral matrices `Dx_force` and `Dy_force`; `u_other` supplies
+the density field differentiated by Trixi's volume flux-differencing operator.
+
+Use this only in the volume integral. Pair it with
+`flux_no_electrostatic_nonconservative` as the surface nonconservative flux to
+apply do-nothing boundary conditions to this force contribution.
+"""
+@inline function flux_gradual_channel_volume(u_mine, u_other,
+                                             orientation::Integer,
+                                             equations::IsotropicHarmonicsFiniteT2D{NVARS}) where {NVARS}
     D = _finite_force_triplets(equations, orientation)
     force_state = _finite_triplets_times_vector(D, u_mine, Val(NVARS))
     density_other = dot(equations.density_row, u_other)
@@ -855,15 +881,26 @@ end
            density_other * force_state
 end
 
-@inline function flux_electrostatic_nonconservative(u_mine, u_other,
-                                                    normal_direction::AbstractVector,
-                                                    equations::IsotropicHarmonicsFiniteT2D{NVARS}) where {NVARS}
+@inline function flux_gradual_channel_volume(u_mine, u_other,
+                                             normal_direction::AbstractVector,
+                                             equations::IsotropicHarmonicsFiniteT2D{NVARS}) where {NVARS}
     force_state = _finite_apply_force_matrix(equations, normal_direction, u_mine,
                                              Val(NVARS))
     density_other = dot(equations.density_row, u_other)
     return -convert(eltype(u_mine), equations.electrostatic_chi) *
            density_other * force_state
 end
+
+# Backwards-compatible name for the volume force. Prefer
+# `flux_gradual_channel_volume` paired with zero surface nonconservative fluxes.
+@inline flux_electrostatic_nonconservative(u_mine, u_other, orientation::Integer,
+                                           equations::IsotropicHarmonicsFiniteT2D) =
+    flux_gradual_channel_volume(u_mine, u_other, orientation, equations)
+
+@inline flux_electrostatic_nonconservative(u_mine, u_other,
+                                           normal_direction::AbstractVector,
+                                           equations::IsotropicHarmonicsFiniteT2D) =
+    flux_gradual_channel_volume(u_mine, u_other, normal_direction, equations)
 
 # ------------------------------------------------------------------------------------------
 # Source terms
@@ -1039,23 +1076,6 @@ function _finite_bgk_parameters(equations::IsotropicHarmonicsFiniteT2D, u)
     return fields.density, fields.delta_mu, fields.velocity[1], fields.velocity[2]
 end
 
-function _finite_bgk_parameters_regularized(equations::IsotropicHarmonicsFiniteT2D, u)
-    density_delta = dot(equations.density_row, u)
-    density = equations.equilibrium_density + density_delta
-    density_floor = max(sqrt(eps(Float64)) * equations.equilibrium_density,
-                        sqrt(eps(Float64)))
-    density_for_closure = isfinite(density) ? max(density, density_floor) :
-                          density_floor
-    delta_mu = _finite_chemical_potential_shift_from_density(equations,
-                                                             density_for_closure)
-    momentum = hydrodynamic_momentum(equations, u)
-    px = isfinite(momentum[1]) ? momentum[1] : zero(momentum[1])
-    py = isfinite(momentum[2]) ? momentum[2] : zero(momentum[2])
-    vx = px / (equations.mass * density_for_closure)
-    vy = py / (equations.mass * density_for_closure)
-    return density_for_closure, delta_mu, vx, vy
-end
-
 function _finite_local_equilibrium(equations::IsotropicHarmonicsFiniteT2D{NVARS},
                                    delta_mu, vx, vy) where {NVARS}
     T = promote_type(typeof(delta_mu), typeof(vx), typeof(vy))
@@ -1115,7 +1135,7 @@ end
 
 function _finite_density_local_equilibrium(equations::IsotropicHarmonicsFiniteT2D,
                                            u)
-    _, delta_mu, _, _ = _finite_bgk_parameters_regularized(equations, u)
+    _, delta_mu, _, _ = _finite_bgk_parameters(equations, u)
     target = _finite_local_equilibrium(equations, delta_mu, zero(delta_mu),
                                        zero(delta_mu))
     return _finite_correct_density(equations, target, u)
@@ -1123,7 +1143,7 @@ end
 
 function _finite_hydro_local_equilibrium(equations::IsotropicHarmonicsFiniteT2D,
                                          u)
-    _, delta_mu, vx, vy = _finite_bgk_parameters_regularized(equations, u)
+    _, delta_mu, vx, vy = _finite_bgk_parameters(equations, u)
     target = _finite_local_equilibrium(equations, delta_mu, vx, vy)
     return _finite_correct_hydro(equations, target, u)
 end
@@ -1176,26 +1196,14 @@ end
 function build_projector_cache(equations::IsotropicHarmonicsFiniteT2D,
                                normal::AbstractVector{T},
                                rho_row::AbstractVector{T}) where {T<:Real}
-    return _finite_build_projector_cache(equations, normal, rho_row, Val(false))
-end
-
-function build_contact_projector_cache(equations::IsotropicHarmonicsFiniteT2D,
-                                       normal::AbstractVector{T},
-                                       rho_row::AbstractVector{T}) where {T<:Real}
-    return _finite_build_projector_cache(equations, normal, rho_row, Val(true))
-end
-
-function _finite_build_projector_cache(equations::IsotropicHarmonicsFiniteT2D,
-                                       normal::AbstractVector{T},
-                                       rho_row::AbstractVector{T},
-                                       ::Val{FULL}) where {T<:Real, FULL}
     nrm = norm(normal)
     nrm > zero(T) || throw(ArgumentError("normal must be nonzero"))
     nx = normal[1] / nrm
     ny = normal[2] / nrm
-    # Walls use kinetic half-space data; driven contacts use full characteristics
-    # of the closed gradual-channel moment system.
-    A = _finite_projector_matrix(equations, nx, ny; full_operator=FULL)
+    # Boundary incoming/outgoing data are kinetic half-space data. The
+    # electrostatic rank-one gradual-channel term remains in the PDE flux, but
+    # does not decide which bare particle modes the reservoir/wall controls.
+    A = _finite_projector_matrix(equations, nx, ny; full_operator=false)
     nvars = nvariables(equations)
     S = T.(equations.gram_sqrt)
 
@@ -1279,15 +1287,8 @@ function _finite_diffuse_thermal_template(u_inner,
                                           equations::IsotropicHarmonicsFiniteT2D)
     density_delta = dot(equations.density_row, u_inner)
     n_total = equations.equilibrium_density + density_delta
-    # The diffuse wall is a thermal re-emission model. If a high-drive DG trace
-    # overshoots outside the positive-density thermodynamic domain, emit from a
-    # tiny positive wall density instead of constructing an invalid Fermi state.
-    density_floor = max(sqrt(eps(Float64)) * equations.equilibrium_density,
-                        sqrt(eps(Float64)))
-    if !isfinite(n_total) || n_total <= density_floor
-        n_total = density_floor
-        density_delta = n_total - equations.equilibrium_density
-    end
+    n_total > 0 ||
+        throw(DomainError(n_total, "wall thermal density must remain positive"))
     delta_mu = equations.temperature *
                _finite_logexpm1(n_total / (2 * equations.temperature)) -
                equations.mu0
@@ -1337,16 +1338,6 @@ struct DensityContactBC{T<:Real} <: AbstractBoundaryCondition
             throw(ArgumentError("relative_density must be greater than -1"))
         return new{Float64}(relative_density)
     end
-end
-
-@inline function _boundary_projector_cache_for(equations::IsotropicHarmonicsFiniteT2D,
-                                               n, rho_row,
-                                               bc::Union{OhmicContactBC,
-                                                         ChemicalPotentialContactBC,
-                                                         DensityContactBC,
-                                                         CurrentContactBC,
-                                                         FloatingProbeBC})
-    return build_contact_projector_cache(equations, n, rho_row)
 end
 
 function _finite_correct_to_density(equations::IsotropicHarmonicsFiniteT2D{NVARS},
@@ -1443,8 +1434,7 @@ end
 
 function assemble_ghost_state(bc::OhmicContactBC, u_inner, normal,
                               equations::IsotropicHarmonicsFiniteT2D)
-    n = _normalized_normal(normal)
-    cache = build_contact_projector_cache(equations, n, normal_flux_row(equations, n))
+    cache = _build_uncached_projectors(normal, equations)
     return assemble_ghost_state(cache, bc, u_inner, normal, equations)
 end
 
@@ -1457,8 +1447,7 @@ end
 
 function assemble_ghost_state(bc::ChemicalPotentialContactBC, u_inner, normal,
                               equations::IsotropicHarmonicsFiniteT2D)
-    n = _normalized_normal(normal)
-    cache = build_contact_projector_cache(equations, n, normal_flux_row(equations, n))
+    cache = _build_uncached_projectors(normal, equations)
     return assemble_ghost_state(cache, bc, u_inner, normal, equations)
 end
 
@@ -1471,8 +1460,7 @@ end
 
 function assemble_ghost_state(bc::DensityContactBC, u_inner, normal,
                               equations::IsotropicHarmonicsFiniteT2D)
-    n = _normalized_normal(normal)
-    cache = build_contact_projector_cache(equations, n, normal_flux_row(equations, n))
+    cache = _build_uncached_projectors(normal, equations)
     return assemble_ghost_state(cache, bc, u_inner, normal, equations)
 end
 

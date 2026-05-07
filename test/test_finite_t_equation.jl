@@ -191,11 +191,14 @@ end
                                   equations.density_row')
     @test Trixi.flux(u, 1, equations) ≈ equations.Ax * u
 
-    @test flux_electrostatic_nonconservative(zero(u), v, 1, equations) ==
+    @test flux_gradual_channel_volume(zero(u), v, 1, equations) ==
           zero(u)
+    @test flux_no_electrostatic_nonconservative(u, v, 1, equations) == zero(u)
+    @test flux_no_electrostatic_nonconservative(u, v, SVector(0.6, 0.8),
+                                                equations) == zero(u)
     density_free = SVector{14, Float64}((I - equations.density_projector) * randn(nvars))
     @test dot(equations.density_row, density_free) ≈ 0.0 atol=1.0e-12
-    @test flux_electrostatic_nonconservative(u, density_free, 1, equations) ≈
+    @test flux_gradual_channel_volume(u, density_free, 1, equations) ≈
           zero(u) atol=1.0e-12
 
     expected_x = -chi * (equations.Dx_force * collect(u)) *
@@ -203,9 +206,9 @@ end
     expected_n = -chi *
                  ((0.6 .* equations.Dx_force .+ 0.8 .* equations.Dy_force) *
                   collect(u)) * dot(equations.density_row, v)
-    @test flux_electrostatic_nonconservative(u, v, 1, equations) ≈ expected_x
-    @test flux_electrostatic_nonconservative(u, v, SVector(0.6, 0.8),
-                                             equations) ≈ expected_n
+    @test flux_gradual_channel_volume(u, v, 1, equations) ≈ expected_x
+    @test flux_gradual_channel_volume(u, v, SVector(0.6, 0.8),
+                                      equations) ≈ expected_n
 
     for D in (equations.Dx_force, equations.Dy_force)
         for j in 1:nvars, i in 1:nvars
@@ -355,9 +358,9 @@ end
         zero(SVector{nvariables(equations), Float64})
     solver = DGSEM(polydeg=1,
                    surface_flux=(flux_lax_friedrichs,
-                                 flux_electrostatic_nonconservative),
+                                 flux_no_electrostatic_nonconservative),
                    volume_integral=VolumeIntegralFluxDifferencing(
-                       (flux_central, flux_electrostatic_nonconservative)))
+                       (flux_central, flux_gradual_channel_volume)))
     semi = SemidiscretizationHyperbolic(mesh, equations, initial_condition, solver;
         source_terms=NonlinearBGKCollision(equations; gamma_mr=0.1, gamma_mc=1.0),
         boundary_conditions=(contact_bottom=OhmicContactBC(-0.01),

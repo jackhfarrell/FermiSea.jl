@@ -19,6 +19,7 @@ include("visualization/visualization.jl")
 
 export IsotropicFermiHarmonics2D, IsotropicHarmonicsFiniteT2D
 export LinearCollisionMatrix, NonlinearBGKCollision, MagneticFieldSource, SourceTerms
+export flux_gradual_channel_volume, flux_no_electrostatic_nonconservative
 export flux_electrostatic_nonconservative
 export hydrodynamic_density, hydrodynamic_momentum, hydrodynamic_velocity
 export hydrodynamic_chemical_potential_shift, hydrodynamic_fields
