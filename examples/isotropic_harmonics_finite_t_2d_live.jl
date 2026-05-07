@@ -73,11 +73,15 @@ function trixi_makie_extension()
     return ext
 end
 
-function field_data(u, semi)
+function field_data(u, semi, equations)
     plot_data = Trixi.PlotData2D(u, semi)
-    density = vec(getindex.(plot_data.data, 1)) # a0_r0
-    jx = vec(getindex.(plot_data.data, 3))      # a1_r0
-    jy = vec(getindex.(plot_data.data, 5))      # b1_r0
+    density_index = 1
+    jx_index = equations.n_radial + 1
+    jy_index = 2 * equations.n_radial + 1
+
+    density = vec(getindex.(plot_data.data, density_index)) # a0_r0
+    jx = vec(getindex.(plot_data.data, jx_index))           # a1_r0
+    jy = vec(getindex.(plot_data.data, jy_index))           # b1_r0
     current = sqrt.(jx.^2 .+ jy.^2)
     return plot_data, density, current
 end
@@ -91,7 +95,7 @@ function scaled_extrema(values)
     return (lo, hi)
 end
 
-plot_data0, density0, current0 = field_data(integrator.u, semi)
+plot_data0, density0, current0 = field_data(integrator.u, semi, equations)
 ext = trixi_makie_extension()
 
 # Use Trixi's Makie triangulation helper rather than flattening the DG nodes into
@@ -151,7 +155,7 @@ while integrator.t < last(ode.tspan)
         step!(integrator)
     end
 
-    _, density, current = field_data(integrator.u, semi)
+    _, density, current = field_data(integrator.u, semi, equations)
     density_obs[] = density
     current_obs[] = current
     density_range_obs[] = scaled_extrema(density)

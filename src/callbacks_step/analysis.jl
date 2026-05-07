@@ -39,8 +39,12 @@ end
 Trixi.pretty_form_utf(::SteadyStateResidual) = "steady state"
 Trixi.pretty_form_ascii(::SteadyStateResidual) = "steady_state"
 
-# for isotropic Fermi Harmonics, incude by default
+# for isotropic Fermi Harmonics, include by default
 Trixi.default_analysis_integrals(::IsotropicFermiHarmonics2D) = (SteadyStateResidual(),)
+Trixi.default_analysis_integrals(::IsotropicHarmonicsFiniteT2D) = (SteadyStateResidual(),)
+
+const IsotropicHarmonicEquations2D = Union{IsotropicFermiHarmonics2D,
+                                           IsotropicHarmonicsFiniteT2D}
 
 # Really annoying error. Basically I figure out that the default implementation of
 # integrate_via_indices segfaults when the integrand is SVector w/ length > 40 or something,
@@ -50,7 +54,7 @@ Trixi.default_analysis_integrals(::IsotropicFermiHarmonics2D) = (SteadyStateResi
 # TODO: try to upstream this??
 function Trixi.integrate_via_indices(func::Func, u,
                                      mesh::Trixi.P4estMesh{2},
-                                     equations::IsotropicFermiHarmonics2D,
+                                     equations::IsotropicHarmonicEquations2D,
                                      dg::Trixi.DGSEM, cache, args...;
                                      normalize=true) where {Func}
     weights = dg.basis.weights
