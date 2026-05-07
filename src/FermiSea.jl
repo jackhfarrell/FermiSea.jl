@@ -18,8 +18,12 @@ include("callbacks_step/callbacks_step.jl")
 include("visualization/visualization.jl")
 
 export IsotropicFermiHarmonics2D, IsotropicHarmonicsFiniteT2D
-export LinearCollisionMatrix, MagneticFieldSource, SourceTerms
-export MaxwellWallBC, OhmicContactBC, FloatingProbeBC, CurrentContactBC
+export LinearCollisionMatrix, NonlinearBGKCollision, MagneticFieldSource, SourceTerms
+export flux_electrostatic_nonconservative
+export hydrodynamic_density, hydrodynamic_momentum, hydrodynamic_velocity
+export hydrodynamic_chemical_potential_shift, hydrodynamic_fields
+export MaxwellWallBC, OhmicContactBC, ChemicalPotentialContactBC
+export FloatingProbeBC, CurrentContactBC
 export SteadyStateResidual, ContactCurrent, ContactCurrentAverage
 export contact_current_normal, contact_boundary_length
 export MonitorCallback, FlushOutputCallback, make_flushing_logger
