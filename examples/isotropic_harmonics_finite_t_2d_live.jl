@@ -26,30 +26,30 @@ const ROOT = dirname(@__DIR__)
 const MESH_FILE = joinpath(ROOT, "assets", "square_bells", "square_bells.inp")
 
 mesh = P4estMesh{2}(MESH_FILE;
-                    polydeg=1,
+                    polydeg=3,
                     boundary_symbols=[:contact_bottom, :contact_top, :walls])
 
-equations = IsotropicHarmonicsFiniteT2D(10, 4;
+equations = IsotropicHarmonicsFiniteT2D(5, 2;
                                         mass=1.0,
                                         mu0=1.0,
                                         temperature=0.05,
                                         zmax=20.0,
                                         n_quad=128,
-                                        electrostatic_chi=10.0)
+                                        electrostatic_chi=1.0)
 
-collisions = NonlinearBGKCollision(equations; gamma_mr=0.0, gamma_mc=50.0)
+collisions = NonlinearBGKCollision(equations; gamma_mr=0.0, gamma_mc=200.0)
 
 initial_condition(x, t, equations) =
     zero(SVector{nvariables(equations), Float64})
 
 # These Ohmic contacts prescribe reservoir electrochemical potentials. With the
-# parameters above, +/-2.1 corresponds to density offsets close to
-# delta_n / n0 = +/-0.1, or delta_mu / mu0 ~= +/-0.1. Boundary projectors use
-# the kinetic incoming/outgoing split; the gradual-channel term remains in the
-# PDE flux.
+# parameters above, +/-0.2 is a much gentler drive than the earlier large-bias
+# setup. Boundary projectors use the full hyperbolic incoming/outgoing split,
+# including the gradual-channel rank-one contribution already folded into the
+# conservative flux matrices.
 boundary_conditions = (;
-    contact_bottom = OhmicContactBC(2.1),
-    contact_top = OhmicContactBC(-2.1),
+    contact_bottom = OhmicContactBC(0.2),
+    contact_top = OhmicContactBC(-0.2),
     walls = MaxwellWallBC(1.0),
 )
 boundary_conditions_parabolic = (;
@@ -58,25 +58,109 @@ boundary_conditions_parabolic = (;
     walls = boundary_condition_do_nothing,
 )
 
-solver = DGSEM(polydeg=2,
-               surface_flux=(flux_lax_friedrichs,
-                             flux_no_electrostatic_nonconservative),
-               volume_integral=VolumeIntegralFluxDifferencing(
-                   (flux_central, flux_no_electrostatic_nonconservative)))
-equations_parabolic = GradualChannelForce2D(equations)
-semi = SemidiscretizationHyperbolicParabolic(mesh, (equations, equations_parabolic),
-                                             initial_condition, solver;
-                                             solver_parabolic=ParabolicFormulationBassiRebay1(),
-                                             source_terms=collisions,
-                                             source_terms_parabolic=GradualChannelForceSource(),
-                                             boundary_conditions=(boundary_conditions,
-                                                                  boundary_conditions_parabolic))
+solver = DGSEM(polydeg=3,
+               surface_flux=flux_lax_friedrichs,
+               volume_integral=VolumeIntegralFluxDifferencing(flux_central))
+
+semi = if iszero(equations.electrostatic_chi)
+    SemidiscretizationHyperbolic(mesh, equations, initial_condition, solver;
+                                 source_terms=collisions,
+                                 boundary_conditions=boundary_conditions)
+else
+    equations_parabolic = GradualChannelForce2D(equations)
+    semi_local = SemidiscretizationHyperbolicParabolic(
+        mesh, (equations, equations_parabolic), initial_condition, solver;
+        solver_parabolic=ParabolicFormulationBassiRebay1(),
+        source_terms=collisions,
+        source_terms_parabolic=GradualChannelForceSource(),
+        boundary_conditions=(boundary_conditions, boundary_conditions_parabolic))
+    # Ensure the finite-temperature boundary projector caches are populated before
+    # the threaded boundary-flux kernels start using them.
+    FermiSea.initialize_boundary_projectors!(semi_local)
+    semi_local
+end
 ode = semidiscretize(semi, (0.0, 8.0))
+
+function state_health_report(u, semi, equations)
+    u_wrap = ndims(u) == 1 ? Trixi.wrap_array(u, semi) : u
+    _, _, solver_local, cache_local = Trixi.mesh_equations_solver_cache(semi)
+
+    min_density = Inf
+    max_state_abs = 0.0
+    bad_reason = nothing
+    bad_element = 0
+    bad_i = 0
+    bad_j = 0
+    bad_state = nothing
+    bad_density = NaN
+    bad_fields = nothing
+
+    for element in Trixi.eachelement(solver_local, cache_local)
+        for j in Trixi.eachnode(solver_local), i in Trixi.eachnode(solver_local)
+            state = Trixi.get_node_vars(u_wrap, equations, solver_local, i, j, element)
+            max_state_abs = max(max_state_abs, maximum(abs, state))
+
+            if !all(isfinite, state)
+                bad_reason = "non-finite state coefficients"
+                bad_element, bad_i, bad_j = element, i, j
+                bad_state = state
+                bad_density = hydrodynamic_density(equations, state)
+                break
+            end
+
+            density = hydrodynamic_density(equations, state)
+            min_density = min(min_density, density)
+            if !isfinite(density)
+                bad_reason = "non-finite reconstructed density"
+                bad_element, bad_i, bad_j = element, i, j
+                bad_state = state
+                bad_density = density
+                break
+            elseif density <= 0
+                bad_reason = "non-positive reconstructed density"
+                bad_element, bad_i, bad_j = element, i, j
+                bad_state = state
+                bad_density = density
+                bad_fields = hydrodynamic_fields(equations, state)
+                break
+            end
+        end
+        bad_reason === nothing || break
+    end
+
+    return (; min_density, max_state_abs, bad_reason, bad_element, bad_i, bad_j,
+            bad_state, bad_density, bad_fields)
+end
+
+function StateHealthCallback(semi, equations; interval=1)
+    interval > 0 || throw(ArgumentError("interval must be positive"))
+
+    affect! = function (integrator)
+        report = state_health_report(integrator.u, semi, equations)
+        if report.bad_reason !== nothing
+            @error "state-health failure" t=integrator.t iter=integrator.iter element=report.bad_element node=(report.bad_i,
+                                                                                                                  report.bad_j) reason=report.bad_reason density=report.bad_density maxabs=report.max_state_abs state=report.bad_state
+            if report.bad_fields !== nothing
+                @error "failing state hydrodynamics" velocity_x=report.bad_fields.velocity[1] velocity_y=report.bad_fields.velocity[2] speed=report.bad_fields.speed delta_mu=report.bad_fields.delta_mu momentum_x=report.bad_fields.momentum[1] momentum_y=report.bad_fields.momentum[2] electrochemical=report.bad_fields.electrochemical_potential
+            end
+            terminate!(integrator)
+            return nothing
+        end
+
+        return nothing
+    end
+
+    return DiscreteCallback(
+        (u, t, integrator) -> integrator.iter % interval == 0,
+        affect!;
+        save_positions=(false, false))
+end
 
 callbacks = CallbackSet(
     SummaryCallback(),
     AnalysisCallback(semi; interval=200, analysis_errors=Symbol[]),
-    StepsizeCallback(; cfl=0.3),
+    StateHealthCallback(semi, equations; interval=1),
+    StepsizeCallback(; cfl=0.2),
 )
 
 integrator = init(ode, SSPRK43();

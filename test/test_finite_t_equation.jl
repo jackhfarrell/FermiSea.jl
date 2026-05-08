@@ -53,6 +53,37 @@
                                                             0, :cos, q)
     @test equations.local_equilibrium_quadratic[:, 1] ≈ expected_quadratic_density
 
+    h = 1.0e-5
+    local_eq(delta_mu, vx, vy) = FermiSea._finite_local_equilibrium(equations, delta_mu,
+                                                                    vx, vy)
+    zero_state = local_eq(0.0, 0.0, 0.0)
+
+    d_delta_mu = (local_eq(h, 0.0, 0.0) - local_eq(-h, 0.0, 0.0)) / (2h)
+    d_vx = (local_eq(0.0, h, 0.0) - local_eq(0.0, -h, 0.0)) / (2h)
+    d_vy = (local_eq(0.0, 0.0, h) - local_eq(0.0, 0.0, -h)) / (2h)
+    @test d_delta_mu ≈ equations.local_equilibrium_linear[:, 1] atol=1.0e-8 rtol=1.0e-8
+    @test d_vx ≈ equations.local_equilibrium_linear[:, 2] atol=1.0e-8 rtol=1.0e-8
+    @test d_vy ≈ equations.local_equilibrium_linear[:, 3] atol=1.0e-8 rtol=1.0e-8
+
+    q_delta_mu2 = (local_eq(h, 0.0, 0.0) - 2 * zero_state +
+                   local_eq(-h, 0.0, 0.0)) / (2h^2)
+    q_delta_mu_vx = (local_eq(h, h, 0.0) - local_eq(h, -h, 0.0) -
+                     local_eq(-h, h, 0.0) + local_eq(-h, -h, 0.0)) / (4h^2)
+    q_delta_mu_vy = (local_eq(h, 0.0, h) - local_eq(h, 0.0, -h) -
+                     local_eq(-h, 0.0, h) + local_eq(-h, 0.0, -h)) / (4h^2)
+    q_vx2 = (local_eq(0.0, h, 0.0) - 2 * zero_state +
+             local_eq(0.0, -h, 0.0)) / (2h^2)
+    q_vy2 = (local_eq(0.0, 0.0, h) - 2 * zero_state +
+             local_eq(0.0, 0.0, -h)) / (2h^2)
+    q_vx_vy = (local_eq(0.0, h, h) - local_eq(0.0, h, -h) -
+               local_eq(0.0, -h, h) + local_eq(0.0, -h, -h)) / (4h^2)
+    @test q_delta_mu2 ≈ equations.local_equilibrium_quadratic[:, 1] atol=1.0e-8 rtol=1.0e-8
+    @test q_delta_mu_vx ≈ equations.local_equilibrium_quadratic[:, 2] atol=1.0e-8 rtol=1.0e-8
+    @test q_delta_mu_vy ≈ equations.local_equilibrium_quadratic[:, 3] atol=1.0e-8 rtol=1.0e-8
+    @test q_vx2 ≈ equations.local_equilibrium_quadratic[:, 4] atol=1.0e-8 rtol=1.0e-8
+    @test q_vy2 ≈ equations.local_equilibrium_quadratic[:, 5] atol=1.0e-8 rtol=1.0e-8
+    @test q_vx_vy ≈ equations.local_equilibrium_quadratic[:, 6] atol=1.0e-8 rtol=1.0e-8
+
     gamma_mr = 0.2
     gamma_mc = 0.7
     collision = LinearCollisionMatrix(equations; gamma_mr, gamma_mc)
@@ -189,13 +220,9 @@ end
     v = SVector{14, Float64}(randn(14))
 
     @test Trixi.have_nonconservative_terms(equations0) == Trixi.False()
-    @test Trixi.have_nonconservative_terms(equations) == Trixi.True()
-    @test equations.Ax ≈ equations0.Ax .+
-                         chi .* (equations.velocity_embedding_x *
-                                  equations.density_row')
-    @test equations.Ay ≈ equations0.Ay .+
-                         chi .* (equations.velocity_embedding_y *
-                                  equations.density_row')
+    @test Trixi.have_nonconservative_terms(equations) == Trixi.False()
+    @test equations.Ax ≈ equations0.Ax
+    @test equations.Ay ≈ equations0.Ay
     @test Trixi.flux(u, 1, equations) ≈ equations.Ax * u
     @test equations0.force_vmax == 0.0
     @test equations.force_vmax > 0
@@ -223,9 +250,13 @@ end
     source = GradualChannelForceSource()
     grad_x = 0.3 .* v
     grad_y = -0.2 .* v
-    source_expected = -chi .* ((dot(equations.density_row, grad_x) .* equations.Dx_force .+
-                                dot(equations.density_row, grad_y) .* equations.Dy_force) *
-                               collect(u))
+    density_x = dot(equations.density_row, grad_x)
+    density_y = dot(equations.density_row, grad_y)
+    current_state_vec = density_x .* equations.velocity_embedding_x .+
+                        density_y .* equations.velocity_embedding_y
+    force_state_vec = (density_x .* equations.Dx_force .+
+                       density_y .* equations.Dy_force) * collect(u)
+    source_expected = chi .* (force_state_vec .- current_state_vec)
     @test source(u, (grad_x, grad_y), SVector(0.0, 0.0), 0.0,
                  equations_parabolic) ≈ source_expected
 
@@ -288,6 +319,35 @@ end
     @test 0 < density_boundary_fields.density_delta / equations.equilibrium_density <
           density_contact.relative_density
 
+    projector_normal = SVector(0.0, 1.0)
+    projector_rho_row = FermiSea.normal_flux_row(equations, projector_normal)
+    cache_full = FermiSea.build_projector_cache(equations, projector_normal,
+                                                projector_rho_row;
+                                                full_operator=true)
+    full_matrix = FermiSea._finite_projector_matrix(equations, projector_normal[1],
+                                                    projector_normal[2];
+                                                    full_operator=true)
+    bare_matrix = FermiSea._finite_projector_matrix(equations, projector_normal[1],
+                                                    projector_normal[2];
+                                                    full_operator=false)
+    @test full_matrix ≈ bare_matrix
+
+    wall_state = SVector{nvars, Float64}(0.01 .* randn(nvars))
+    wall_bc = MaxwellWallBC(0.3)
+    wall_boundary_full = FermiSea.assemble_ghost_state(cache_full, wall_bc,
+                                                       wall_state,
+                                                       projector_normal, equations)
+    @test FermiSea.assemble_ghost_state(wall_bc, wall_state, projector_normal,
+                                        equations) ≈ wall_boundary_full
+
+    contact_state = SVector{nvars, Float64}(0.01 .* randn(nvars))
+    contact_boundary_full = FermiSea.assemble_ghost_state(cache_full, contact,
+                                                          contact_state,
+                                                          projector_normal,
+                                                          equations)
+    @test FermiSea.assemble_ghost_state(contact, contact_state, projector_normal,
+                                        equations) ≈ contact_boundary_full
+
     normal = SVector(0.0, 1.0)
     @test Trixi.flux(potential_boundary, normal, equations) ≈
           equations.Ay * potential_boundary
@@ -314,6 +374,14 @@ end
     @test vx_density ≈ 0.0 atol=1.0e-13
     @test vy_density ≈ 0.0 atol=1.0e-13
 
+    depleted_total_density = 0.01
+    depleted_delta_mu = FermiSea._finite_chemical_potential_shift_from_density(equations,
+                                                                               depleted_total_density)
+    depleted_target = FermiSea._finite_local_equilibrium_isotropic(equations,
+                                                                   depleted_delta_mu)
+    @test dot(equations.density_row, depleted_target) + equations.equilibrium_density ≈
+          depleted_total_density atol=5.0e-10
+
     momentum_state = SVector{nvars, Float64}(0.02 .*
                                              equations.local_equilibrium_linear[:, 2])
     n_mom, _, vx_mom, vy_mom = FermiSea._finite_bgk_parameters(equations,
@@ -335,8 +403,12 @@ end
     hydro_target = FermiSea._finite_hydro_local_equilibrium(equations, u)
     @test dot(equations.density_row, density_target) ≈
           dot(equations.density_row, u) atol=1.0e-11
-    @test equations.moment_matrix * collect(hydro_target) ≈
-          equations.moment_matrix * collect(u) atol=1.0e-11
+    @test equations.moment_matrix[1:3, :] * collect(hydro_target) ≈
+          equations.moment_matrix[1:3, :] * collect(u) atol=1.0e-11
+    delta_mu_hydro, vx_hydro, vy_hydro =
+        FermiSea._finite_match_quadratic_hydro_parameters(equations, u)
+    @test hydro_target ≈ FermiSea._finite_quadratic_local_equilibrium(
+        equations, delta_mu_hydro, vx_hydro, vy_hydro) atol=1.0e-11
 
     nonlinear_source = source(u, SVector(0.0, 0.0), 0.0, equations)
     @test dot(equations.density_row, nonlinear_source) ≈ 0.0 atol=1.0e-11
@@ -347,6 +419,13 @@ end
     mr_source = NonlinearBGKCollision(equations; gamma_mr=0.2, gamma_mc=0.0)
     mr_value = mr_source(u, SVector(0.0, 0.0), 0.0, equations)
     @test dot(equations.density_row, mr_value) ≈ 0.0 atol=1.0e-11
+
+    density_delta = dot(equations.density_row, u)
+    delta_mu_density = FermiSea._finite_match_quadratic_density_parameter(equations,
+                                                                          density_delta)
+    @test density_target ≈
+          FermiSea._finite_quadratic_local_equilibrium_isotropic(equations,
+                                                                 delta_mu_density) atol=1.0e-11
 
     eps_scale = 1.0e-6
     small_u = SVector{nvars, Float64}(eps_scale .* randn(nvars))
@@ -378,7 +457,7 @@ end
     truncated_equations = IsotropicHarmonicsFiniteT2D(1, 2; mass=1.0, mu0=1.0,
                                                       temperature=0.05, n_quad=96)
     @test_logs (:warn,
-                r"truncates the ell=2 quadratic target components") NonlinearBGKCollision(
+                r"truncates the ell=2 and higher harmonic content") NonlinearBGKCollision(
         truncated_equations; gamma_mr=0.1, gamma_mc=0.2)
 
     energy_equations = IsotropicHarmonicsFiniteT2D(2, 2; conserve_energy=true)
@@ -396,10 +475,8 @@ end
     initial_condition(x, t, equations) =
         zero(SVector{nvariables(equations), Float64})
     solver = DGSEM(polydeg=1,
-                   surface_flux=(flux_lax_friedrichs,
-                                 flux_no_electrostatic_nonconservative),
-                   volume_integral=VolumeIntegralFluxDifferencing(
-                       (flux_central, flux_no_electrostatic_nonconservative)))
+                   surface_flux=flux_lax_friedrichs,
+                   volume_integral=VolumeIntegralFluxDifferencing(flux_central))
     boundary_conditions = (contact_bottom=OhmicContactBC(-0.01),
                            contact_top=OhmicContactBC(0.01),
                            walls=MaxwellWallBC(1.0))
