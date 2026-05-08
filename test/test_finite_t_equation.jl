@@ -28,6 +28,11 @@
     Sinv = Diagonal(1 ./ equations.gram_sqrt)
     @test S * equations.Ax * Sinv ≈ (S * equations.Ax * Sinv)' atol=1.0e-10
     @test S * equations.Ay * Sinv ≈ (S * equations.Ay * Sinv)' atol=1.0e-10
+    normal_oblique = normalize(SVector(1.0, 2.0))
+    A_oblique = FermiSea._finite_projector_matrix(equations, normal_oblique[1],
+                                                  normal_oblique[2];
+                                                  full_operator=false)
+    @test S * A_oblique * Sinv ≈ (S * A_oblique * Sinv)' atol=1.0e-10
 
     for A in (equations.Ax, equations.Ay)
         for j in 1:nvars, i in 1:nvars
@@ -37,6 +42,11 @@
             @test abs(ell_i - ell_j) == 1
         end
     end
+
+    @test FermiSea.normal_flux_row(equations, SVector(1.0, 0.0)) ≈
+          vec(transpose(equations.density_row) * equations.Ax)
+    @test FermiSea.normal_flux_row(equations, SVector(0.0, 1.0)) ≈
+          vec(transpose(equations.density_row) * equations.Ay)
 
     c = randn(nvars)
     @test equations.moment_matrix * (equations.hydro_projector * c) ≈
@@ -111,6 +121,15 @@
                                                      thermal_u, normal, equations)
     @test dot(FermiSea.normal_flux_row(equations, normal), diffuse_boundary) ≈
           0.0 atol=1.0e-10
+    oblique_diffuse_boundary = FermiSea.assemble_ghost_state(MaxwellWallBC(1.0),
+                                                             thermal_u,
+                                                             normal_oblique,
+                                                             equations)
+    @test dot(FermiSea.normal_flux_row(equations, normal_oblique),
+              oblique_diffuse_boundary) ≈ 0.0 atol=1.0e-10
+    @test_throws ArgumentError FermiSea.assemble_ghost_state(CurrentContactBC(0.1),
+                                                             thermal_u, normal,
+                                                             equations)
 
     contact = OhmicContactBC(0.5)
     contact_boundary = FermiSea.assemble_ghost_state(contact, u, normal, equations)
@@ -215,14 +234,23 @@ end
     equations = IsotropicHarmonicsFiniteT2D(3, 2; mass=1.0, mu0=1.0,
                                             temperature=0.05, n_quad=128,
                                             electrostatic_chi=chi)
+    equations_full_projectors = IsotropicHarmonicsFiniteT2D(3, 2; mass=1.0, mu0=1.0,
+                                                            temperature=0.05,
+                                                            n_quad=128,
+                                                            electrostatic_chi=chi,
+                                                            full_characteristic_projectors=true)
     nvars = nvariables(equations)
     u = SVector{14, Float64}(randn(14))
     v = SVector{14, Float64}(randn(14))
 
     @test Trixi.have_nonconservative_terms(equations0) == Trixi.False()
     @test Trixi.have_nonconservative_terms(equations) == Trixi.False()
-    @test equations.Ax ≈ equations0.Ax
-    @test equations.Ay ≈ equations0.Ay
+    @test equations.Ax ≈ equations0.Ax .+
+                         chi .* (equations.velocity_embedding_x *
+                                  equations.density_row')
+    @test equations.Ay ≈ equations0.Ay .+
+                         chi .* (equations.velocity_embedding_y *
+                                  equations.density_row')
     @test Trixi.flux(u, 1, equations) ≈ equations.Ax * u
     @test equations0.force_vmax == 0.0
     @test equations.force_vmax > 0
@@ -252,11 +280,9 @@ end
     grad_y = -0.2 .* v
     density_x = dot(equations.density_row, grad_x)
     density_y = dot(equations.density_row, grad_y)
-    current_state_vec = density_x .* equations.velocity_embedding_x .+
-                        density_y .* equations.velocity_embedding_y
     force_state_vec = (density_x .* equations.Dx_force .+
                        density_y .* equations.Dy_force) * collect(u)
-    source_expected = chi .* (force_state_vec .- current_state_vec)
+    source_expected = -chi .* force_state_vec
     @test source(u, (grad_x, grad_y), SVector(0.0, 0.0), 0.0,
                  equations_parabolic) ≈ source_expected
 
@@ -284,6 +310,14 @@ end
                                                      equations)
     boundary_fields = hydrodynamic_fields(equations, contact_boundary)
     @test boundary_fields.electrochemical_potential ≈ contact.bias atol=1.0e-12
+    contact_cache = FermiSea.build_projector_cache(equations, SVector(0.0, 1.0),
+                                                   FermiSea.normal_flux_row(equations,
+                                                                            SVector(0.0, 1.0)))
+    random_contact_boundary = FermiSea.assemble_ghost_state(contact_cache, contact,
+                                                            u, SVector(0.0, 1.0),
+                                                            equations)
+    random_boundary_fields = hydrodynamic_fields(equations, random_contact_boundary)
+    @test random_boundary_fields.electrochemical_potential ≈ contact.bias atol=1.0e-12
 
     potential_contact = ChemicalPotentialContactBC(0.2)
     potential_template = FermiSea._template(potential_contact, zero(u), equations)
@@ -321,32 +355,53 @@ end
 
     projector_normal = SVector(0.0, 1.0)
     projector_rho_row = FermiSea.normal_flux_row(equations, projector_normal)
+    cache_bare = FermiSea.build_projector_cache(equations, projector_normal,
+                                                projector_rho_row)
     cache_full = FermiSea.build_projector_cache(equations, projector_normal,
                                                 projector_rho_row;
                                                 full_operator=true)
+    cache_full_default = FermiSea.build_projector_cache(equations_full_projectors,
+                                                        projector_normal,
+                                                        projector_rho_row)
     full_matrix = FermiSea._finite_projector_matrix(equations, projector_normal[1],
                                                     projector_normal[2];
                                                     full_operator=true)
     bare_matrix = FermiSea._finite_projector_matrix(equations, projector_normal[1],
                                                     projector_normal[2];
                                                     full_operator=false)
-    @test full_matrix ≈ bare_matrix
+    @test norm(full_matrix - bare_matrix) > 1.0e-12
+    Ivars = Matrix{Float64}(I, nvars, nvars)
+    basis = ntuple(i -> SVector{nvars, Float64}(Ivars[:, i]), nvars)
+    P_full = hcat((FermiSea._apply_P_in(cache_full, e_i) for e_i in basis)...)
+    @test P_full ≈ hcat((FermiSea._apply_P_in(cache_full_default, e_i)
+                         for e_i in basis)...)
+    @test P_full * P_full ≈ P_full atol=1.0e-10
+    @test maximum(abs, imag.(eigvals(ComplexF64.(full_matrix)))) <= 1.0e-12
+    @test tr(P_full) ≈ count(real.(eigvals(ComplexF64.(full_matrix))) .<
+                             -sqrt(eps(Float64)) * max(1.0, opnorm(full_matrix, 2))) atol=1.0e-8
 
     wall_state = SVector{nvars, Float64}(0.01 .* randn(nvars))
     wall_bc = MaxwellWallBC(0.3)
+    wall_boundary_bare = FermiSea.assemble_ghost_state(cache_bare, wall_bc,
+                                                       wall_state,
+                                                       projector_normal, equations)
     wall_boundary_full = FermiSea.assemble_ghost_state(cache_full, wall_bc,
                                                        wall_state,
                                                        projector_normal, equations)
     @test FermiSea.assemble_ghost_state(wall_bc, wall_state, projector_normal,
-                                        equations) ≈ wall_boundary_full
+                                        equations) ≈ wall_boundary_bare
 
     contact_state = SVector{nvars, Float64}(0.01 .* randn(nvars))
+    contact_boundary_bare = FermiSea.assemble_ghost_state(cache_bare, contact,
+                                                          contact_state,
+                                                          projector_normal,
+                                                          equations)
     contact_boundary_full = FermiSea.assemble_ghost_state(cache_full, contact,
                                                           contact_state,
                                                           projector_normal,
                                                           equations)
     @test FermiSea.assemble_ghost_state(contact, contact_state, projector_normal,
-                                        equations) ≈ contact_boundary_full
+                                        equations) ≈ contact_boundary_bare
 
     normal = SVector(0.0, 1.0)
     @test Trixi.flux(potential_boundary, normal, equations) ≈

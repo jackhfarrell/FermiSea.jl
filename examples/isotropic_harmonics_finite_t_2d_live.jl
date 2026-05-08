@@ -29,7 +29,7 @@ mesh = P4estMesh{2}(MESH_FILE;
                     polydeg=3,
                     boundary_symbols=[:contact_bottom, :contact_top, :walls])
 
-equations = IsotropicHarmonicsFiniteT2D(5, 2;
+equations = IsotropicHarmonicsFiniteT2D(5, 3;
                                         mass=1.0,
                                         mu0=1.0,
                                         temperature=0.05,
@@ -43,13 +43,14 @@ initial_condition(x, t, equations) =
     zero(SVector{nvariables(equations), Float64})
 
 # These Ohmic contacts prescribe reservoir electrochemical potentials. With the
-# parameters above, +/-0.2 is a much gentler drive than the earlier large-bias
-# setup. Boundary projectors use the full hyperbolic incoming/outgoing split,
-# including the gradual-channel rank-one contribution already folded into the
-# conservative flux matrices.
+# parameters above, +/-0.1 is still below the earlier unstable large-bias runs.
+# The reservoir state is isotropic and zero-drift, but at finite temperature it
+# can populate multiple scalar radial modes through the nonlinear density/chemical-
+# potential relation. Boundary projectors use the bare kinetic characteristic
+# split; the gradual-channel conservative term stays out of the projector.
 boundary_conditions = (;
-    contact_bottom = OhmicContactBC(0.2),
-    contact_top = OhmicContactBC(-0.2),
+    contact_bottom = OhmicContactBC(0.1),
+    contact_top = OhmicContactBC(0.0),
     walls = MaxwellWallBC(1.0),
 )
 boundary_conditions_parabolic = (;
@@ -275,10 +276,7 @@ vy_plot = mesh!(ax_vy, plotting_mesh;
                 colormap=:balance,
                 shading=NoShading)
 
-wire_points = ext.convert_PlotData2D_to_mesh_Points(getindex(plot_data0, "a0_r0");
-                                                    set_z_coordinate_zero=true)
 for axis in (ax_density, ax_speed, ax_electrochemical, ax_vy)
-    lines!(axis, wire_points; color=(:black, 0.18), linewidth=0.45)
     xlims!(axis, extrema(plot_data0.x))
     ylims!(axis, extrema(plot_data0.y))
 end

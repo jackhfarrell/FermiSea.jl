@@ -348,8 +348,7 @@ end
 
 struct ProjectorCache{T, NVARS, KIN, L}
     normal::SVector{2, T}
-    V_in::SMatrix{NVARS, KIN, T, L}  
-    gram_sqrt::SVector{NVARS, T}     
+    P_in::SMatrix{NVARS, NVARS, T, L}
     p_in_e1::SVector{NVARS, T}      
     rho_row::SVector{NVARS, T}        
 end
@@ -465,9 +464,18 @@ end
 
 @inline function _apply_P_in(cache::ProjectorCache{T, NVARS, KIN, L},
                              u::SVector{NVARS, T}) where {T, NVARS, KIN, L}
-    w = cache.gram_sqrt .* u
-    c = cache.V_in' * w
-    return (cache.V_in * c) ./ cache.gram_sqrt
+    return cache.P_in * u
+end
+
+function _coeff_projector_from_orthogonal_basis(V_in::AbstractMatrix{T},
+                                                gram_sqrt::AbstractVector{T}) where {T}
+    nvars = length(gram_sqrt)
+    P_orth = V_in * V_in'
+    P = Matrix{T}(undef, nvars, nvars)
+    @inbounds for j in 1:nvars, i in 1:nvars
+        P[i, j] = P_orth[i, j] * gram_sqrt[j] / gram_sqrt[i]
+    end
+    return P
 end
 
 function _normal_matrix(n_harmonics::Integer, normal::AbstractVector{T},
@@ -510,12 +518,12 @@ function build_projector_cache(n_harmonics::Integer, normal::AbstractVector{T},
 
     e1 = zeros(T, nvars)
     e1[1] = one(T)
-    p_in_e1 = (V_in * (V_in' * (S .* e1))) ./ S
+    P_in = _coeff_projector_from_orthogonal_basis(V_in, S)
+    p_in_e1 = P_in * e1
 
-    return ProjectorCache{T, nvars, n_harmonics, nvars * n_harmonics}(
+    return ProjectorCache{T, nvars, n_harmonics, nvars * nvars}(
         SVector{2, T}(normal),
-        SMatrix{nvars, n_harmonics, T}(V_in),
-        SVector{nvars, T}(S),
+        SMatrix{nvars, nvars, T}(P_in),
         SVector{nvars, T}(p_in_e1),
         SVector{nvars, T}(rho_row),
     )

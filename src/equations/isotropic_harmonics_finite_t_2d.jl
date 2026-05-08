@@ -40,12 +40,11 @@ a0_r0, a0_r1, \ldots, a1_r0, \ldots, b1_r0, \ldots, a2_r0, b2_r0, \ldots
 using a quadratic finite-temperature expansion in density and drift velocity.
 
 If `electrostatic_chi != 0`, the model also includes the self-consistent gradual
-channel force from ``U = \chi n``. In the Trixi workflow used here, both the
-rank-one current term and the force completion are applied through
-`GradualChannelForce2D` and `GradualChannelForceSource`, while the hyperbolic
-operator stays purely kinetic. Trixi computes the spatial gradients, the
-parabolic flux is zero, and the volume source supplies the full electrostatic
-completion.
+channel force from ``U = \chi n``. The rank-one current contribution is folded
+into the conservative flux matrices, while the nonlinear force completion is
+applied through `GradualChannelForce2D` and `GradualChannelForceSource`. Trixi
+computes the spatial gradients, the parabolic flux is zero, and the volume
+source supplies ``-\chi \nabla n \cdot \nabla_p f`` for the perturbation part.
 """
 struct IsotropicHarmonicsFiniteT2D{NVARS, ELECTROSTATIC} <: AbstractEquations{2, NVARS}
     n_harmonics::Int
@@ -93,6 +92,7 @@ struct IsotropicHarmonicsFiniteT2D{NVARS, ELECTROSTATIC} <: AbstractEquations{2,
     gram_sqrt::Vector{Float64}
     force_vmax::Float64
     vmax::Float64
+    full_characteristic_projectors::Bool
 end
 
 function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
@@ -102,7 +102,8 @@ function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
                                      zmax::Real=20.0,
                                      n_quad::Integer=256,
                                      conserve_energy::Bool=false,
-                                     electrostatic_chi::Real=0.0)
+                                     electrostatic_chi::Real=0.0,
+                                     full_characteristic_projectors::Bool=false)
     n_harmonics = Int(n_harmonics)
     n_radial = Int(n_radial)
     n_quad = Int(n_quad)
@@ -154,13 +155,18 @@ function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
                                             quad_weights, radial_basis,
                                             radial_basis_z_derivative)
     kinetic_vmax = sqrt(2 * maximum(eps_nodes) / mass)
+    if electrostatic_chi != 0
+        Ax .+= electrostatic_chi .* (velocity_embedding_x * density_row')
+        Ay .+= electrostatic_chi .* (velocity_embedding_y * density_row')
+    end
     Ax_triplets = _finite_matrix_triplets(Ax)
     Ay_triplets = _finite_matrix_triplets(Ay)
     Dx_force_triplets = _finite_matrix_triplets(Dx_force)
     Dy_force_triplets = _finite_matrix_triplets(Dy_force)
     force_vmax = electrostatic_chi == 0 ? 0.0 :
                  hypot(opnorm(Dx_force, 2), opnorm(Dy_force, 2))
-    vmax = kinetic_vmax
+    vmax = electrostatic_chi == 0 ? kinetic_vmax :
+           _finite_t_characteristic_speed(Ax, Ay, kinetic_vmax)
     equilibrium_density = 2 * temperature * _finite_log1pexp(mu0 / temperature)
     local_equilibrium_density_linear = local_equilibrium_linear[:, 1]
     local_equilibrium_density_quadratic = local_equilibrium_quadratic[:, 1]
@@ -181,7 +187,8 @@ function IsotropicHarmonicsFiniteT2D(n_harmonics::Integer, n_radial::Integer;
         equilibrium_density, local_equilibrium_linear,
         local_equilibrium_quadratic, local_equilibrium_density_linear,
         local_equilibrium_density_quadratic, local_equilibrium_moments_linear,
-        local_equilibrium_moments_quadratic, gram_sqrt, force_vmax, vmax)
+        local_equilibrium_moments_quadratic, gram_sqrt, force_vmax, vmax,
+        full_characteristic_projectors)
 end
 
 # ------------------------------------------------------------------------------------------
@@ -902,8 +909,11 @@ end
 @doc raw"""
     flux_gradual_channel_volume(u_mine, u_other, direction, equations)
 
-Interior two-point flux for the nonlinear gradual-channel force
-``-\chi \nabla\delta n \cdot \nabla_p \delta f``. The momentum derivatives are
+Interior two-point flux for the nonlinear gradual-channel completion
+``-\chi \nabla\delta n \cdot \nabla_p \delta f``. The conservative rank-one
+piece from ``-\chi \nabla\delta n \cdot \nabla_p f_0`` is already folded into
+`Ax, Ay`; this helper represents only the perturbative ``\delta f`` piece. The
+momentum derivatives are
 the precomputed spectral matrices `Dx_force` and `Dy_force`; `u_other` supplies
 the density field differentiated by Trixi's volume flux-differencing operator.
 
@@ -948,11 +958,13 @@ end
 """
     GradualChannelForce2D(equations_hyperbolic)
 
-Parabolic-side equation wrapper for the nonlinear gradual-channel force. Trixi's
+Parabolic-side equation wrapper for the nonlinear gradual-channel completion.
+Trixi's
 hyperbolic-parabolic workflow computes gradients of the conservative variables
 for this equation; `GradualChannelForceSource` then applies
-`-χ ∇δn ⋅ ∇p δf` as a gradient-dependent source term. The parabolic flux itself
-is zero, so the completion imposes no extra flux boundary condition.
+`-χ ∇δn ⋅ ∇p δf` as a gradient-dependent source term. The rank-one conservative
+piece already lives in the hyperbolic flux matrices, so the parabolic flux
+itself is zero and this wrapper carries only the nonlinear completion.
 """
 struct GradualChannelForce2D{E, NVARS} <:
        Trixi.AbstractEquationsParabolic{2, NVARS,
@@ -964,6 +976,13 @@ function GradualChannelForce2D(equations_hyperbolic::IsotropicHarmonicsFiniteT2D
     return GradualChannelForce2D{typeof(equations_hyperbolic),
                                  nvariables(equations_hyperbolic)}(equations_hyperbolic)
 end
+
+struct GradualChannelBoundaryCondition{BC} <: AbstractBoundaryCondition
+    hyperbolic_bc::BC
+end
+
+GradualChannelBoundaryCondition(hyperbolic_bc::AbstractBoundaryCondition) =
+    GradualChannelBoundaryCondition{typeof(hyperbolic_bc)}(hyperbolic_bc)
 
 @inline Base.getproperty(equations::GradualChannelForce2D, field::Symbol) =
     field === :equations_hyperbolic ? getfield(equations, field) :
@@ -986,6 +1005,23 @@ end
     return zero(SVector{NVARS, eltype(u)})
 end
 
+@inline function (boundary_condition::GradualChannelBoundaryCondition)(flux_inner, u_inner,
+                                                                       normal::AbstractVector,
+                                                                       x, t,
+                                                                       operator_type::Trixi.Gradient,
+                                                                       equations::GradualChannelForce2D)
+    return assemble_ghost_state(boundary_condition.hyperbolic_bc, u_inner, normal,
+                                equations.equations_hyperbolic)
+end
+
+@inline function (boundary_condition::GradualChannelBoundaryCondition)(flux_inner, u_inner,
+                                                                       normal::AbstractVector,
+                                                                       x, t,
+                                                                       operator_type::Trixi.Divergence,
+                                                                       equations::GradualChannelForce2D)
+    return flux_inner
+end
+
 struct GradualChannelForceSource end
 
 @inline function (::GradualChannelForceSource)(u, gradients, x, t,
@@ -993,14 +1029,10 @@ struct GradualChannelForceSource end
     grad_x, grad_y = gradients
     density_x = dot(equations.density_row, grad_x)
     density_y = dot(equations.density_row, grad_y)
-    current_state = density_x .* equations.velocity_embedding_x .+
-                    density_y .* equations.velocity_embedding_y
     force_state = _finite_apply_force_matrix(equations.equations_hyperbolic,
                                              SVector(density_x, density_y),
                                              u, Val(NVARS))
-    # Source = +χ∇δn·∇_p f. Force on f₀ gives -χ∇δn·v_embed (current_state enters
-    # with opposite sign); force on δf gives +χ∇δn·Dx·u (force_state enters as-is).
-    return convert(eltype(u), equations.electrostatic_chi) * (force_state - current_state)
+    return -convert(eltype(u), equations.electrostatic_chi) * force_state
 end
 
 function LinearCollisionMatrix(equations::IsotropicHarmonicsFiniteT2D, W::AbstractMatrix)
@@ -1577,17 +1609,61 @@ end
 # ------------------------------------------------------------------------------------------
 
 normal_flux_row(equations::IsotropicHarmonicsFiniteT2D, normal) =
-    vec((normal[1] .* equations.Ax .+ normal[2] .* equations.Ay)[1, :])
+    vec(transpose(equations.density_row) *
+        (normal[1] .* equations.Ax .+ normal[2] .* equations.Ay))
 
 function _finite_projector_matrix(equations::IsotropicHarmonicsFiniteT2D,
                                   nx, ny; full_operator::Bool)
-    return nx .* equations.Ax .+ ny .* equations.Ay
+    A = nx .* equations.Ax .+ ny .* equations.Ay
+    if !full_operator && equations.electrostatic_chi != 0
+        A .-= equations.electrostatic_chi .*
+              ((nx .* equations.velocity_embedding_x .+
+                ny .* equations.velocity_embedding_y) * equations.density_row')
+    end
+    return A
+end
+
+function _real_matrix_from_complex(M::AbstractMatrix{Complex{T}},
+                                   label::AbstractString) where {T<:Real}
+    imag_norm = maximum(abs, imag.(M))
+    imag_norm <= sqrt(eps(T)) * max(one(T), maximum(abs, real.(M))) ||
+        throw(ArgumentError("$label has non-negligible imaginary part $imag_norm"))
+    return real.(M)
+end
+
+function _biorthogonal_projector_from_operator(A_orth::AbstractMatrix{T},
+                                               gram_sqrt::AbstractVector{T},
+                                               tol::T) where {T<:Real}
+    nvars = length(gram_sqrt)
+    right = eigen(ComplexF64.(A_orth))
+    left = eigen(adjoint(ComplexF64.(A_orth)))
+    incoming_right = real.(right.values) .< -tol
+    incoming_left = real.(left.values) .< -tol
+    kin = count(incoming_right)
+    kin == count(incoming_left) || throw(ErrorException(
+        "left/right incoming eigenspace dimension mismatch ($kin vs " *
+        "$(count(incoming_left)))"))
+    kin > 0 || throw(ErrorException("empty incoming eigenspace for full projector"))
+
+    R = right.vectors[:, incoming_right]
+    L = left.vectors[:, incoming_left]
+    overlap = adjoint(L) * R
+    inv(cond(overlap)) > sqrt(eps(T)) || throw(ErrorException(
+        "incoming full-characteristic eigenspace is ill-conditioned"))
+    P_orth_complex = R * (overlap \ adjoint(L))
+    P_orth = _real_matrix_from_complex(P_orth_complex, "full-characteristic projector")
+
+    P = Matrix{T}(undef, nvars, nvars)
+    @inbounds for j in 1:nvars, i in 1:nvars
+        P[i, j] = P_orth[i, j] * gram_sqrt[j] / gram_sqrt[i]
+    end
+    return P, kin
 end
 
 function build_projector_cache(equations::IsotropicHarmonicsFiniteT2D,
                                normal::AbstractVector{T},
                                rho_row::AbstractVector{T};
-                               full_operator::Bool=true) where {T<:Real}
+                               full_operator::Bool=equations.full_characteristic_projectors) where {T<:Real}
     nrm = norm(normal)
     nrm > zero(T) || throw(ArgumentError("normal must be nonzero"))
     nx = normal[1] / nrm
@@ -1603,19 +1679,22 @@ function build_projector_cache(equations::IsotropicHarmonicsFiniteT2D,
 
     F = eigen(Symmetric(A_orth))
     tol = sqrt(eps(T)) * max(one(T), maximum(abs, F.values))
-    incoming = F.values .< -tol
-    V_in = F.vectors[:, incoming]
-    kin = size(V_in, 2)
+    P_in, kin = if full_operator && equations.electrostatic_chi != 0
+        _biorthogonal_projector_from_operator(A_orth, S, tol)
+    else
+        incoming = F.values .< -tol
+        V_in = F.vectors[:, incoming]
+        (_coeff_projector_from_orthogonal_basis(V_in, S), size(V_in, 2))
+    end
     kin > 0 || throw(ErrorException("empty incoming eigenspace for normal $normal"))
 
     e1 = zeros(T, nvars)
     e1[1] = one(T)
-    p_in_e1 = (V_in * (V_in' * (S .* e1))) ./ S
+    p_in_e1 = P_in * e1
 
-    return ProjectorCache{T, nvars, kin, nvars * kin}(
+    return ProjectorCache{T, nvars, kin, nvars * nvars}(
         SVector{2, T}(normal),
-        SMatrix{nvars, kin, T}(V_in),
-        SVector{nvars, T}(S),
+        SMatrix{nvars, nvars, T}(P_in),
         SVector{nvars, T}(p_in_e1),
         SVector{nvars, T}(rho_row),
     )
@@ -1847,6 +1926,106 @@ function assemble_ghost_state(bc::DensityContactBC, u_inner, normal,
                               equations::IsotropicHarmonicsFiniteT2D)
     cache = _build_uncached_projectors(normal, equations)
     return assemble_ghost_state(cache, bc, u_inner, normal, equations)
+end
+
+_target_flux(::MaxwellWallBC, u_inner, normal,
+             equations::IsotropicHarmonicsFiniteT2D) = zero(eltype(u_inner))
+
+function assemble_ghost_state(bc::AbstractBoundaryCondition, u_inner, normal,
+                              equations::IsotropicHarmonicsFiniteT2D)
+    cache = _build_uncached_projectors(normal, equations)
+    template = _template(bc, u_inner, normal, equations)
+    target_flux = _target_flux(bc, u_inner, normal, equations)
+    u_boundary, _ = solve_bc_constant(cache, u_inner;
+                                      u_bc_template=template,
+                                      target_flux=target_flux)
+    return u_boundary
+end
+
+function assemble_ghost_state(bc::CurrentContactBC, u_inner, normal,
+                              equations::IsotropicHarmonicsFiniteT2D)
+    throw(ArgumentError("CurrentContactBC enforces a total current over a full " *
+                        "boundary, so assemble_ghost_state requires a semidiscretization " *
+                        "boundary-flux context. Use OhmicContactBC for a prescribed local " *
+                        "potential template."))
+end
+
+function assemble_ghost_state(bc::FloatingProbeBC, u_inner, normal,
+                              equations::IsotropicHarmonicsFiniteT2D)
+    throw(ArgumentError("FloatingProbeBC enforces zero total current over a full " *
+                        "boundary, so assemble_ghost_state requires a semidiscretization " *
+                        "boundary-flux context. Use OhmicContactBC for a prescribed local " *
+                        "potential template."))
+end
+
+function assemble_ghost_state(cache::ProjectorCache, bc::AbstractBoundaryCondition,
+                              u_inner, normal,
+                              equations::IsotropicHarmonicsFiniteT2D)
+    template = _template(bc, u_inner, normal, equations)
+    target_flux = _target_flux(bc, u_inner, normal, equations)
+    u_boundary, _ = solve_bc_constant(cache, u_inner;
+                                      u_bc_template=template,
+                                      target_flux=target_flux)
+    return u_boundary
+end
+
+function _current_contact_potential(bc::Union{CurrentContactBC, FloatingProbeBC},
+                                    equations::IsotropicHarmonicsFiniteT2D,
+                                    dg, cache)
+    storage = _boundary_projector_cache(cache, bc)
+    isempty(storage.boundary_indices) &&
+        throw(ArgumentError("contact boundary condition has no initialized boundary indices. " *
+                            "Call initialize_boundary_projectors!(semi) before solve(...)."))
+
+    boundaries = cache.boundaries
+    contravariant_vectors = cache.elements.contravariant_vectors
+    weights = dg.basis.weights
+    index_range = eachnode(dg)
+
+    base_current = zero(eltype(boundaries.u))
+    potential_response = zero(eltype(boundaries.u))
+
+    for boundary in storage.boundary_indices
+        element = boundaries.neighbor_ids[boundary]
+        node_indices = boundaries.node_indices[boundary]
+        direction = Trixi.indices2direction(node_indices)
+
+        i_start, i_step = Trixi.index_to_start_step_2d(node_indices[1], index_range)
+        j_start, j_step = Trixi.index_to_start_step_2d(node_indices[2], index_range)
+
+        i_node = i_start
+        j_node = j_start
+        for node in index_range
+            normal_direction = Trixi.get_normal_direction(direction,
+                                                          contravariant_vectors,
+                                                          i_node, j_node, element)
+            projector = _lookup_projectors(storage, boundary, node, normal_direction,
+                                           equations)
+            u_inner = Trixi.get_node_vars(boundaries.u, equations, dg, node, boundary)
+            base_state = _current_contact_base_state(projector, u_inner)
+            rho_row = normal_flux_row(equations, normal_direction)
+
+            weight = weights[node]
+            base_current += weight * dot(rho_row, base_state)
+            potential_response += weight * dot(rho_row, projector.p_in_e1)
+
+            i_node += i_step
+            j_node += j_step
+        end
+    end
+
+    abs(potential_response) > sqrt(eps(real(potential_response))) ||
+        throw(ArgumentError("CurrentContactBC has singular contact-current response"))
+
+    return (convert(typeof(base_current), _total_current_target(bc)) - base_current) /
+           potential_response
+end
+
+function assemble_ghost_state(cache::ProjectorCache,
+                              bc::Union{CurrentContactBC, FloatingProbeBC},
+                              u_inner, normal,
+                              equations::IsotropicHarmonicsFiniteT2D, potential)
+    return _current_contact_state(cache, u_inner, potential)
 end
 
 @inline function (bc::AbstractBoundaryCondition)(u_inner, normal_direction::AbstractVector,
