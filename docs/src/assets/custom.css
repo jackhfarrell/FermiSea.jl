@@ -1,0 +1,57 @@
+:root {
+  --fermisea-accent: #167d8d;
+}
+html.theme--documenter-dark {
+  --fermisea-accent: #77c4c8;
+}
+html:root #documenter .docs-sidebar .docs-package-name {
+  display: flex;
+  align-items: center;
+  min-height: 80px;
+  padding: 1rem 1rem 1rem 5rem;
+  text-align: left;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+html:root #documenter .docs-sidebar .docs-logo {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  padding: 0;
+}
+html:root #documenter .docs-sidebar .docs-logo img {
+  max-height: 48px;
+}
+#documenter .docs-sidebar {
+  border-top: 4px solid var(--fermisea-accent);
+}
+#documenter .docs-main h1 {
+  letter-spacing: -0.035em;
+  font-weight: 650;
+}
+#documenter .docs-main h1 img {
+  width: 64px;
+  height: 64px;
+  margin-right: 0.6rem;
+  vertical-align: middle;
+}
+#documenter .docs-main h2 {
+  margin-top: 2rem;
+  letter-spacing: -0.015em;
+}
+#documenter .docs-main > article {
+  max-width: 920px;
+}
+#documenter .docs-main p,
+#documenter .docs-main li {
+  line-height: 1.75;
+}
+#documenter .docs-main img {
+  border-radius: 4px;
+}
+#documenter .docs-main pre {
+  border-left: 3px solid var(--fermisea-accent);
+}
