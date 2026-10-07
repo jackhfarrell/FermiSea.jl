@@ -1,30 +1,22 @@
 using FermiSea
+using CairoMakie
 using LinearAlgebra
+using Random
+using SparseArrays
 using StaticArrays
 using Test
 using Trixi
 
-const TEST_GROUP = get(ENV, "TRIXI_TEST", "all")
-
-function include_test_group(group)
-    if group == "all"
-        include("test_unit.jl")
-        include("test_type.jl")
-        include("test_upstream.jl")
-        include("test_p4est_2d.jl")
-    elseif group == "unit"
-        include("test_unit.jl")
-    elseif group == "type"
-        include("test_type.jl")
-    elseif group == "upstream"
-        include("test_upstream.jl")
-    elseif group == "p4est_2d"
-        include("test_p4est_2d.jl")
-    else
-        error("Unknown TRIXI_TEST group: $group")
-    end
-end
-
-@testset "FermiSea" begin
-    include_test_group(TEST_GROUP)
-end
+include("helpers.jl")
+include("test_surface_collision.jl")
+include("test_local_operators.jl")
+include("test_equations_boundaries.jl")
+include("test_steady.jl")
+include("test_optimized.jl")
+include("test_boundaries_contacts.jl")
+include("test_moment_sweep.jl")
+include("test_workflow.jl")
+include("test_plot_data.jl")
+include("test_io.jl")
+include("test_makie.jl")
+include("test_contracts.jl")
