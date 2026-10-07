@@ -1,19 +1,14 @@
-Manifest.toml
+/Manifest.toml
+/docs/Manifest.toml
+/docs/build/
+/docs/src/tutorials/
+/examples/Manifest.toml
+/examples/output/
+
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
-/docs/build/
-/docs/site/
-meshes/
-output/
-*.h5
-*.vtu
-*.pvtu
-*_preproc.inp
-*_p4est_ready.inp
 .DS_Store
-
-# Local AI-assistant tooling
 AGENTS.md
 CLAUDE.md
 .claude/
